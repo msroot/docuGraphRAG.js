@@ -13,7 +13,7 @@ export class DocuGraphRAG {
             },
             vectorSize: 3072,
             llmUrl: 'http://localhost:11434',
-            llmModel: 'llama3.2',
+            llmModel: 'llama2',
             chunkSize: 1000,
             chunkOverlap: 200,
             searchLimit: 3,
