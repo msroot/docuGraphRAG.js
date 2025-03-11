@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>docuGraphRAG.js</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body>
+    <header class="header">
+        <div class="header-content">
+            <h1>docuGraphRAG.js</h1>
+            <p>💡 Chat with your PDF documents</p>
+        </div>
+    </header>
+    
+    <main class="container">
+        <div class="sidebar">
+            <div class="document-list" id="document-list">
+                <h3>Your Documents</h3>
+                <div id="documents"></div>
+            </div>
+            <div class="drop-zone" id="drop-zone">
+                <div class="icon" onclick="document.getElementById('pdf-upload').click()">📄</div>
+                <p>Drop your PDF here</p>
+                <input type="file" id="pdf-upload" accept=".pdf" style="display: none;">
+            </div>
+            <div class="loading" id="upload-loading">
+                <div class="simple-loader"></div>
+                <p>Processing PDF...</p>
+            </div>
+            <div class="error" id="upload-error"></div>
+            <div id="pdf-preview"></div>
+            <button onclick="handleReset()">Start Over</button>
+        </div>
+        
+        <div class="main-content">
+            <div class="chat-container" id="chat-container"></div>
+            <div class="input-container">
+                <input type="text" id="user-input" placeholder="Ask a question about your PDF..." disabled>
+                <button id="mic-button" onclick="toggleMic()" disabled>
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+                        <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                        <line x1="12" y1="19" x2="12" y2="23"></line>
+                        <line x1="8" y1="23" x2="16" y2="23"></line>
+                    </svg>
+                </button>
+            </div>
+        </div>
+    </main>
+    
+    <footer class="footer">
+        <p>Chat with your PDF documents using RAG (Retrieval-Augmented Generation)</p>
+        <div class="footer-links">            
+            <span>
+                <a href="https://qdrant.tech/" target="_blank" rel="noopener noreferrer">Qdrant Vector DB</a> • 
+                <a href="https://ollama.ai/" target="_blank" rel="noopener noreferrer">Ollama</a> • 
+                <a href="https://ai.meta.com/llama/" target="_blank" rel="noopener noreferrer">Llama 2</a>
+            </span>
+        </div>
+        <div class="footer-credit">
+            Built by <a href="http://msroot.me/" target="_blank" rel="noopener noreferrer">Yannis Kolovos</a>
+        </div>
+    </footer>
+
+    <style>
+        .document-list {
+            padding: 1rem;
+            background: #f8f9fa;
+            border-radius: 8px;
+            margin-bottom: 1rem;
+        }
+        .document-list h3 {
+            margin: 0 0 1rem 0;
+            color: #333;
+        }
+        .document-item {
+            display: flex;
+            align-items: center;
+            padding: 0.5rem;
+            margin: 0.5rem 0;
+            background: white;
+            border-radius: 4px;
+            border: 1px solid #e9ecef;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .document-item:hover {
+            background: #e9ecef;
+        }
+        .document-item.active {
+            border-color: #007bff;
+            background: #e7f1ff;
+        }
+        .document-item .icon {
+            margin-right: 0.5rem;
+            font-size: 1.2rem;
+        }
+        .document-item .name {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .document-item .date {
+            font-size: 0.8rem;
+            color: #6c757d;
+            margin-left: 0.5rem;
+        }
+    </style>
+
+    <script>
+        // API endpoint configuration
+        const API_ENDPOINT = 'http://localhost:3000';
+        
+        let currentSessionId = null;
+        let currentDocumentId = null;
+        let documents = new Map();
+
+        // Load documents immediately when the script runs
+        loadDocuments();
+
+        // Also load documents when the DOM is ready
+        window.addEventListener('DOMContentLoaded', () => {
+            loadDocuments();
+            initializeDragAndDrop();
+        });
+
+        function initializeDragAndDrop() {
+            // Drag and drop handlers
+            const dropZone = document.getElementById('drop-zone');
+            const fileInput = document.getElementById('pdf-upload');
+
+            ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+                dropZone.addEventListener(eventName, preventDefaults, false);
+            });
+
+            function preventDefaults(e) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
+
+            ['dragenter', 'dragover'].forEach(eventName => {
+                dropZone.addEventListener(eventName, highlight, false);
+            });
+
+            ['dragleave', 'drop'].forEach(eventName => {
+                dropZone.addEventListener(eventName, unhighlight, false);
+            });
+
+            function highlight(e) {
+                dropZone.classList.add('dragover');
+            }
+
+            function unhighlight(e) {
+                dropZone.classList.remove('dragover');
+            }
+
+            dropZone.addEventListener('drop', handleDrop, false);
+
+            function handleDrop(e) {
+                const dt = e.dataTransfer;
+                const files = dt.files;
+                if (files.length > 0) {
+                    fileInput.files = files;
+                    handleFileUpload(files[0]);
+                }
+            }
+
+            // Add change event listener to file input
+            fileInput.addEventListener('change', (e) => {
+                const file = e.target.files[0];
+                if (file) {
+                    handleFileUpload(file);
+                }
+            });
+        }
+
+        async function loadDocuments() {
+            console.log('Loading documents...');
+            try {
+                const response = await fetch(`${API_ENDPOINT}/documents`);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const data = await response.json();
+                
+                if (data.success) {
+                    console.log('Documents loaded:', data.documents);
+                    documents.clear();
+                    const documentsDiv = document.getElementById('documents');
+                    if (!documentsDiv) {
+                        console.error('Documents container not found');
+                        return;
+                    }
+                    documentsDiv.innerHTML = '';
+
+                    if (data.documents.length === 0) {
+                        // Show the drop zone if no documents
+                        document.getElementById('drop-zone').style.display = 'block';
+                        document.getElementById('document-list').style.display = 'none';
+                    } else {
+                        // Hide drop zone and show document list if we have documents
+                        document.getElementById('drop-zone').style.display = 'none';
+                        document.getElementById('document-list').style.display = 'block';
+                        
+                        data.documents.forEach(doc => {
+                            documents.set(doc.id, doc);
+                            addDocumentToList(doc);
+                        });
+                    }
+
+                    // Update UI state
+                    updateUIState();
+                } else {
+                    console.error('Failed to load documents:', data.error);
+                }
+            } catch (error) {
+                console.error('Error loading documents:', error);
+            }
+        }
+
+        function addDocumentToList(doc) {
+            const documentsDiv = document.getElementById('documents');
+            const docElement = document.createElement('div');
+            docElement.className = 'document-item';
+            docElement.dataset.id = doc.id;
+            docElement.innerHTML = `
+                <span class="icon">📄</span>
+                <span class="name">${doc.name}</span>
+                <span class="date">${new Date(doc.uploadedAt).toLocaleDateString()}</span>
+            `;
+            docElement.onclick = () => selectDocument(doc.id);
+            documentsDiv.appendChild(docElement);
+            console.log('Added document to list:', doc.name);
+        }
+
+        function selectDocument(docId) {
+            // Update UI to show selected document
+            document.querySelectorAll('.document-item').forEach(item => {
+                item.classList.remove('active');
+            });
+            const selectedItem = document.querySelector(`.document-item[data-id="${docId}"]`);
+            if (selectedItem) {
+                selectedItem.classList.add('active');
+            }
+            currentDocumentId = docId;
+
+            // Update input placeholder
+            const doc = documents.get(docId);
+            if (doc) {
+                document.getElementById('user-input').placeholder = `Ask me about ${doc.name}...`;
+            }
+
+            // Enable chat if not already enabled
+            disableChat(false);
+        }
+
+        function updateUIState() {
+            const hasDocuments = documents.size > 0;
+            const dropZone = document.getElementById('drop-zone');
+            const documentList = document.getElementById('document-list');
+            const documentsContainer = document.getElementById('documents');
+
+            console.log('Updating UI state, has documents:', hasDocuments);
+
+            if (hasDocuments) {
+                dropZone.style.display = 'none';
+                documentList.style.display = 'block';
+                documentsContainer.style.display = 'block';
+            } else {
+                dropZone.style.display = 'block';
+                documentList.style.display = 'none';
+                documentsContainer.style.display = 'none';
+            }
+
+            // Enable/disable chat based on documents
+            disableChat(!hasDocuments);
+        }
+
+        // Modified PDF Upload Handler
+        async function handleFileUpload(file) {
+            if (!file || file.type !== 'application/pdf') {
+                showError('Please upload a valid PDF file.');
+                return;
+            }
+
+            // Show loading state and hide any previous error
+            document.getElementById('upload-loading').classList.add('active');
+            document.getElementById('drop-zone').classList.add('hidden');
+            hideError();
+            disableChat(true);
+
+            try {
+                const formData = new FormData();
+                formData.append('pdf', file);
+
+                const response = await fetch(`${API_ENDPOINT}/upload`, {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await response.json();
+                
+                if (data.success) {
+                    console.log('Document uploaded successfully:', data.document);
+                    // Add new document to list and select it
+                    documents.set(data.document.id, data.document);
+                    addDocumentToList(data.document);
+                    selectDocument(data.document.id);
+                    updateUIState();
+                } else {
+                    throw new Error(data.error || 'Failed to process PDF');
+                }
+            } catch (error) {
+                console.error('Error processing PDF:', error);
+                showError(error.message);
+                document.getElementById('drop-zone').classList.remove('hidden');
+            } finally {
+                document.getElementById('upload-loading').classList.remove('active');
+            }
+        }
+
+        // Function to disable/enable chat
+        function disableChat(disabled) {
+            document.getElementById('user-input').disabled = disabled;
+            document.getElementById('mic-button').disabled = disabled;
+        }
+
+        // Update the addMessageToChat function
+        function addMessageToChat(role, content, isStreaming = false) {
+            const chatContainer = document.getElementById('chat-container');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${role}-message`;
+            
+            if (role === 'assistant' && content === 'Thinking...') {
+                messageDiv.className = 'message thinking';
+                messageDiv.innerHTML = `
+                    <p>Thinking<span class="thinking-dots"><span>.</span><span>.</span><span>.</span></span></p>
+                `;
+            } else if (role === 'assistant') {
+                marked.setOptions({
+                    breaks: true,
+                    gfm: true,
+                    headerIds: false
+                });
+                messageDiv.innerHTML = marked.parse(content);
+            } else {
+                messageDiv.textContent = content;
+            }
+            
+            chatContainer.appendChild(messageDiv);
+            chatContainer.scrollTo({
+                top: chatContainer.scrollHeight,
+                behavior: 'smooth'
+            });
+            return messageDiv;
+        }
+
+        // Send Message Handler
+        async function sendMessage() {
+            const input = document.getElementById('user-input');
+            const message = input.value.trim();
+            if (!message) return;
+
+            // Add user message to chat
+            addMessageToChat('user', message);
+            input.value = '';
+
+            // Add thinking message
+            const thinkingMessage = addMessageToChat('assistant', 'Thinking...');
+
+            try {
+                const response = await fetch(`${API_ENDPOINT}/chat`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ 
+                        message,
+                        documentId: currentDocumentId // Can be null to search all documents
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error('Failed to get response');
+                }
+
+                // Remove thinking message
+                thinkingMessage.remove();
+                
+                // Create new assistant message div
+                const messageDiv = document.createElement('div');
+                messageDiv.className = 'message assistant-message';
+                document.getElementById('chat-container').appendChild(messageDiv);
+
+                // Set up event source for streaming
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let fullResponse = '';
+
+                while (true) {
+                    const { value, done } = await reader.read();
+                    if (done) break;
+
+                    const chunk = decoder.decode(value);
+                    const lines = chunk.split('\n').filter(Boolean);
+
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            try {
+                                const eventData = line.slice(6);
+                                if (eventData === '[DONE]') {
+                                    // End of stream
+                                    break;
+                                }
+
+                                const parsedData = JSON.parse(eventData);
+                                if (parsedData.content) {
+                                    // Append new content
+                                    fullResponse += parsedData.content;
+                                    messageDiv.innerHTML = marked.parse(fullResponse);
+
+                                    // Scroll to bottom
+                                    const chatContainer = document.getElementById('chat-container');
+                                    chatContainer.scrollTop = chatContainer.scrollHeight;
+                                }
+                            } catch (e) {
+                                console.error('Error parsing chunk:', e);
+                            }
+                        }
+                    }
+                }
+            } catch (error) {
+                console.error('Error sending message:', error);
+                thinkingMessage.remove();
+                addMessageToChat('assistant', 'Sorry, there was an error processing your request.');
+            }
+        }
+
+        // Clear chat
+        function clearChat() {
+            document.getElementById('chat-container').innerHTML = '';
+        }
+
+        // Handle Enter key in input
+        document.getElementById('user-input').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        });
+
+        // Error handling functions
+        function showError(message) {
+            const errorDiv = document.getElementById('upload-error');
+            errorDiv.textContent = message;
+            errorDiv.classList.add('active');
+        }
+
+        function hideError() {
+            const errorDiv = document.getElementById('upload-error');
+            errorDiv.textContent = '';
+            errorDiv.classList.remove('active');
+        }
+
+        function handleReset() {
+            const dropZone = document.getElementById('drop-zone');
+            const pdfPreview = document.getElementById('pdf-preview');
+            
+            // Hide PDF preview with animation
+            pdfPreview.classList.remove('active');
+            
+            // Show drop zone after a short delay
+            setTimeout(() => {
+                dropZone.classList.remove('hidden');
+                pdfPreview.innerHTML = '';
+                document.getElementById('upload-error').classList.remove('active');
+                document.getElementById('upload-loading').classList.remove('active');
+            }, 300);
+
+            window.location.reload();
+        }
+
+        // Add Speech Recognition functionality
+        let recognition = null;
+        let isListening = false;
+
+        if ('webkitSpeechRecognition' in window) {
+            recognition = new webkitSpeechRecognition();
+            recognition.continuous = false;
+            recognition.interimResults = false;
+            recognition.lang = 'en-US';
+
+            recognition.onresult = function(event) {
+                const transcript = event.results[0][0].transcript;
+                document.getElementById('user-input').value = transcript;
+                toggleMic(); // Turn off mic after getting result
+            };
+
+            recognition.onerror = function(event) {
+                console.error('Speech recognition error:', event.error);
+                toggleMic(); // Turn off mic on error
+            };
+        }
+
+        function toggleMic() {
+            const micButton = document.getElementById('mic-button');
+            
+            if (!recognition) {
+                console.error('Speech recognition not supported');
+                return;
+            }
+
+            if (!isListening) {
+                recognition.start();
+                isListening = true;
+                micButton.classList.add('listening');
+            } else {
+                recognition.stop();
+                isListening = false;
+                micButton.classList.remove('listening');
+            }
+        }
+    </script>
+</body>
+</html> 
