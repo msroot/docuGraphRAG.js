@@ -24,25 +24,124 @@ export class InformationExtractor {
     }
 
     async extractEntities(text) {
+        // Get base entities from NLP
         const doc = nlp(text);
-        const entities = [];
+        const baseEntities = [];
 
         // Extract people
         doc.people().forEach(match => {
-            entities.push({ text: match.text(), type: 'PERSON' });
+            baseEntities.push({ text: match.text(), type: 'PERSON' });
         });
 
         // Extract organizations
         doc.organizations().forEach(match => {
-            entities.push({ text: match.text(), type: 'ORGANIZATION' });
+            baseEntities.push({ text: match.text(), type: 'ORGANIZATION' });
         });
 
         // Extract places
         doc.places().forEach(match => {
-            entities.push({ text: match.text(), type: 'LOCATION' });
+            baseEntities.push({ text: match.text(), type: 'LOCATION' });
         });
 
-        return entities;
+        // Use LLM to extract additional entities and enrich existing ones
+        try {
+            const prompt = `Extract and classify entities from the following text. Include additional details when available.
+            Entity types: PERSON, ORGANIZATION, LOCATION, PRODUCT, EVENT, TECHNOLOGY
+            Format each entity as: { text: "entity name", type: "ENTITY_TYPE", details: { relevant key-value pairs } }
+
+            For example:
+            - PERSON: Include role, title, or affiliation
+            - ORGANIZATION: Include industry, size, or purpose
+            - LOCATION: Include region, country, or type
+            - PRODUCT: Include category, features, or company
+            - EVENT: Include date, location, or significance
+            - TECHNOLOGY: Include field, purpose, or capabilities
+
+            Text: ${text}`;
+
+            const response = await this.llm.chat([
+                {
+                    role: "system",
+                    content: "You are an expert at identifying and classifying entities in text. Extract entities with their context and additional details when available."
+                },
+                {
+                    role: "user",
+                    content: prompt
+                }
+            ]);
+
+            // Parse LLM response
+            const llmEntities = this.parseLLMEntities(response);
+
+            // Merge NLP and LLM entities, preferring LLM details when available
+            const mergedEntities = this.mergeEntities(baseEntities, llmEntities);
+            
+            if (this.debug) {
+                console.log('[InformationExtractor] Extracted entities:', {
+                    nlp: baseEntities.length,
+                    llm: llmEntities.length,
+                    merged: mergedEntities.length
+                });
+            }
+
+            return mergedEntities;
+        } catch (error) {
+            console.warn('Warning: LLM entity extraction failed, using NLP entities only:', error.message);
+            return baseEntities;
+        }
+    }
+
+    parseLLMEntities(llmResponse) {
+        try {
+            // Remove any markdown formatting
+            const cleanResponse = llmResponse.replace(/```json\n|\n```/g, '');
+            const entities = JSON.parse(cleanResponse);
+            
+            // Validate and format entities
+            return entities.filter(entity => 
+                entity.text && 
+                entity.type && 
+                typeof entity.text === 'string' && 
+                typeof entity.type === 'string'
+            ).map(entity => ({
+                ...entity,
+                type: entity.type.toUpperCase(),
+                details: entity.details || {}
+            }));
+        } catch (error) {
+            console.warn('Warning: Error parsing LLM entities:', error.message);
+            return [];
+        }
+    }
+
+    mergeEntities(nlpEntities, llmEntities) {
+        const entityMap = new Map();
+
+        // Add NLP entities first
+        nlpEntities.forEach(entity => {
+            const key = `${entity.text.toLowerCase()}-${entity.type}`;
+            entityMap.set(key, entity);
+        });
+
+        // Add or update with LLM entities
+        llmEntities.forEach(entity => {
+            const key = `${entity.text.toLowerCase()}-${entity.type}`;
+            if (entityMap.has(key)) {
+                // Merge with existing entity, preserving additional details
+                entityMap.set(key, {
+                    ...entityMap.get(key),
+                    ...entity,
+                    details: {
+                        ...entityMap.get(key).details,
+                        ...entity.details
+                    }
+                });
+            } else {
+                entityMap.set(key, entity);
+            }
+        });
+
+        return Array.from(entityMap.values());
     }
 
     extractKeywords(text) {
@@ -99,11 +198,68 @@ export class InformationExtractor {
         return this.llm.extractConcepts(text);
     }
 
+    async extractRelationships(text) {
+        try {
+            const prompt = `Extract relationships between entities in the following text. 
+            Format: List of {source, relationship, target} where:
+            - source: The entity initiating the relationship
+            - relationship: The type of connection (use UPPERCASE)
+            - target: The entity receiving the relationship
+
+            Text: ${text}`;
+
+            const response = await this.llm.chat([
+                {
+                    role: "system",
+                    content: "You are a relationship extraction expert. Extract only clear, explicit relationships from the text. Use UPPERCASE for relationship types."
+                },
+                {
+                    role: "user",
+                    content: prompt
+                }
+            ]);
+
+            // Parse the response into structured relationships
+            const relationships = this.parseRelationships(response);
+            return relationships;
+        } catch (error) {
+            console.warn('Warning: Error extracting relationships:', error.message);
+            return [];
+        }
+    }
+
+    parseRelationships(llmResponse) {
+        try {
+            // Remove any markdown formatting
+            const cleanResponse = llmResponse.replace(/```json\n|\n```/g, '');
+            const relationships = JSON.parse(cleanResponse);
+            
+            // Validate and format relationships
+            return relationships.filter(rel => 
+                rel.source && 
+                rel.relationship && 
+                rel.target && 
+                typeof rel.source === 'string' && 
+                typeof rel.relationship === 'string' && 
+                typeof rel.target === 'string'
+            );
+        } catch (error) {
+            console.warn('Warning: Error parsing relationships:', error.message);
+            return [];
+        }
+    }
+
     async extractAll(text) {
+        const [entities, relationships] = await Promise.all([
+            this.extractEntities(text),
+            this.extractRelationships(text)
+        ]);
+
         return {
-            entities: await this.extractEntities(text),
+            entities: entities,
             keywords: this.extractKeywords(text),
-            concepts: await this.extractConcepts(text)
+            concepts: await this.extractConcepts(text),
+            relationships: relationships
         };
     }
 }

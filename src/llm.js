@@ -4,7 +4,8 @@ export class LLMService {
     constructor(config = {}) {
         this.config = {
             llmUrl: 'http://localhost:11434',
-            llmModel: 'llama2',
+            // llmModel: 'llama2',
+            llmModel: 'mistral',
             debug: false,
             ...config
         };
@@ -120,12 +121,44 @@ Given the context information, answer the following question. If the answer cann
 Question: ${question}
 Answer:`;
 
-            const response = await axios.post(`${this.config.llmUrl}/api/generate`, {
-                model: this.config.llmModel,
-                prompt: prompt
-            });
+            this.log('Sending request to LLM API');
+            
+            // Use Promise to handle streaming response
+            return new Promise((resolve, reject) => {
+                let fullResponse = '';
+                
+                axios.post(`${this.config.llmUrl}/api/generate`, {
+                    model: this.config.llmModel,
+                    prompt: prompt,
+                    stream: true
+                }, {
+                    responseType: 'stream'
+                }).then(response => {
+                    response.data.on('data', chunk => {
+                        try {
+                            const data = JSON.parse(chunk.toString());
+                            if (data.response) {
+                                fullResponse += data.response;
+                            }
+                        } catch (error) {
+                            console.error('[LLMService] Error parsing stream chunk:', error);
+                        }
+                    });
 
-            return response.data.response;
+                    response.data.on('end', () => {
+                        this.log('Successfully received complete response');
+                        resolve(fullResponse);
+                    });
+
+                    response.data.on('error', error => {
+                        console.error('[LLMService] Stream error:', error);
+                        reject(error);
+                    });
+                }).catch(error => {
+                    console.error('[LLMService] Request error:', error);
+                    reject(error);
+                });
+            });
         } catch (error) {
             console.error('[LLMService] Error generating answer:', error);
             throw error;
@@ -145,6 +178,7 @@ Given the context information, answer the following question. If the answer cann
 Question: ${question}
 Answer:`;
 
+            this.log('Starting streaming response');
             const response = await axios.post(`${this.config.llmUrl}/api/generate`, {
                 model: this.config.llmModel,
                 prompt: prompt,
@@ -156,33 +190,27 @@ Answer:`;
             response.data.on('data', chunk => {
                 try {
                     const data = JSON.parse(chunk.toString());
-                    if (data.response && options.onData) {
-                        options.onData(data.response);
+                    if (data.response) {
+                        options.onData?.(data.response);
+                    }
+                    // If this is the last chunk, call onEnd
+                    if (data.done && options.onEnd) {
+                        options.onEnd();
                     }
                 } catch (error) {
                     console.error('[LLMService] Error parsing stream chunk:', error);
-                }
-            });
-
-            response.data.on('end', () => {
-                if (options.onEnd) {
-                    options.onEnd();
+                    options.onError?.(error);
                 }
             });
 
             response.data.on('error', error => {
                 console.error('[LLMService] Stream error:', error);
-                if (options.onError) {
-                    options.onError(error);
-                }
+                options.onError?.(error);
             });
+
         } catch (error) {
-            console.error('[LLMService] Error generating streaming answer:', error);
-            if (options.onError) {
-                options.onError(error);
-            } else {
-                throw error;
-            }
+            console.error('[LLMService] Error in streaming answer:', error);
+            options.onError?.(error);
         }
     }
 } 

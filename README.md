@@ -1,3 +1,50 @@
+<!-- 
+
+http://localhost:7474/browser/
+
+
+// Check document and chunks
+MATCH (d:Document {id: $YOUR_DOC_ID})-[r:HAS_CHUNK]->(c:DocumentChunk)
+RETURN d.fileName, c.content, c.index;
+
+// Check entities
+MATCH (d:Document {id: $YOUR_DOC_ID})-[:HAS_CHUNK]->(c:DocumentChunk)-[:HAS_ENTITY]->(e:Entity)
+RETURN e.text, e.type;
+
+// Check keywords
+MATCH (d:Document {id: $YOUR_DOC_ID})-[:HAS_CHUNK]->(c:DocumentChunk)-[:HAS_KEYWORD]->(k:Keyword)
+RETURN k.text;
+
+// Check concepts
+MATCH (d:Document {id: $YOUR_DOC_ID})-[:HAS_CHUNK]->(c:DocumentChunk)-[:EXPRESSES_CONCEPT]->(co:Concept)
+RETURN co.text;
+
+
+  MATCH (n)
+ DETACH DELETE n
+
+
+MATCH (d:Document {id: 'abd4d46a-ee98-4941-910d-8c729728c61a'}) 
+OPTIONAL MATCH (d)-[:HAS_CHUNK]->(c:DocumentChunk)
+OPTIONAL MATCH (c)-[:HAS_ENTITY]->(e:Entity)
+OPTIONAL MATCH (c)-[:HAS_KEYWORD]->(k:Keyword)
+OPTIONAL MATCH (c)-[:EXPRESSES_CONCEPT]->(co:Concept)
+OPTIONAL MATCH (d)-[:CONTAINS_ENTITY]->(de:Entity)
+OPTIONAL MATCH (d)-[:CONTAINS_KEYWORD]->(dk:Keyword)
+OPTIONAL MATCH (d)-[:CONTAINS_CONCEPT]->(dco:Concept)
+RETURN d, c, e, k, co, de, dk, dco; 
+
+
+MATCH (d:Document {id: '68f026d9-e33f-4934-b506-2f4147b36cf2'})-[:HAS_CHUNK]->(c:DocumentChunk)-[:HAS_ENTITY]->(e:Entity)
+WHERE e.type = 'PERSON'
+RETURN DISTINCT e.text as person, count(c) as mentions
+ORDER BY mentions DESC
+
+
+-->
+
+
+
 # docuGraphRAG.js
 
 💡 Chat with your PDF documents

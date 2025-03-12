@@ -378,10 +378,7 @@
                     headers: {
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify({ 
-                        message,
-                        documentId: currentDocumentId // Can be null to search all documents
-                    })
+                    body: JSON.stringify({ message })
                 });
 
                 if (!response.ok) {
@@ -418,6 +415,12 @@
                                 }
 
                                 const parsedData = JSON.parse(eventData);
+                                
+                                if (parsedData.error) {
+                                    messageDiv.innerHTML = marked.parse('Error: ' + parsedData.error);
+                                    break;
+                                }
+                                
                                 if (parsedData.content) {
                                     // Append new content
                                     fullResponse += parsedData.content;

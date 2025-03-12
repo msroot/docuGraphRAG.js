@@ -11,7 +11,7 @@ export class DocuGraphRAG {
             neo4jPassword: 'password123',
             vectorSize: 3072,
             llmUrl: 'http://localhost:11434',
-            llmModel: 'llama2',
+            llmModel: 'mistral',
             chunkSize: 1000,
             chunkOverlap: 200,
             searchLimit: 3,
@@ -113,7 +113,11 @@ export class DocuGraphRAG {
         const nodeConfig = {
             Entity: {
                 label: 'Entity',
-                properties: { text: data.text, type: data.type },
+                properties: { 
+                    text: data.text, 
+                    type: data.type,
+                    ...data.details // Include additional entity details
+                },
                 chunkRel: 'HAS_ENTITY',
                 docRel: 'CONTAINS_ENTITY'
             },
@@ -144,6 +148,7 @@ export class DocuGraphRAG {
             WITH c, n
             MATCH (d:Document {id: c.documentId})
             MERGE (d)-[:${config.docRel}]->(n)
+            RETURN n
         `, {
             chunkId,
             ...config.properties
@@ -236,6 +241,25 @@ export class DocuGraphRAG {
                             if (!concept || typeof concept !== 'string') continue;
                             await this.createSemanticNode(tx, 'Concept', concept, chunk.id, metadata.id);
                         }
+
+                        // Process LLM-extracted relationships
+                        if (chunk.extractedInfo.relationships) {
+                            for (const rel of chunk.extractedInfo.relationships) {
+                                await tx.run(`
+                                    MATCH (source:Entity {text: $sourceText})
+                                    MATCH (target:Entity {text: $targetText})
+                                    MERGE (source)-[r:${rel.relationship}]->(target)
+                                    SET r.confidence = $confidence,
+                                        r.extractedFrom = $chunkId
+                                    RETURN r
+                                `, {
+                                    sourceText: rel.source,
+                                    targetText: rel.target,
+                                    confidence: 0.8, // Default confidence score
+                                    chunkId: chunk.id
+                                });
+                            }
+                        }
                     }
                 });
             } finally {
@@ -251,6 +275,9 @@ export class DocuGraphRAG {
     }
 
     async vectorSearch(session, embedding, limit, useVectorIndex = true) {
+        // Ensure limit is an integer
+        const intLimit = Math.floor(Number(limit));
+        
         const query = useVectorIndex ? `
             MATCH (c:DocumentChunk)
             WITH c, vector.similarity(c.embedding, $embedding) AS score
@@ -263,7 +290,7 @@ export class DocuGraphRAG {
                  collect(DISTINCT k.text) as keywords,
                  collect(DISTINCT co.text) as concepts
             ORDER BY score DESC
-            LIMIT $limit
+            LIMIT toInteger($limit)
             RETURN c.content AS text, c.documentId AS documentId,
                    entities, keywords, concepts, score
         ` : `
@@ -279,14 +306,14 @@ export class DocuGraphRAG {
                  collect(DISTINCT k.text) as keywords,
                  collect(DISTINCT co.text) as concepts
             ORDER BY score DESC
-            LIMIT $limit
+            LIMIT toInteger($limit)
             RETURN c.content AS text, c.documentId AS documentId,
                    entities, keywords, concepts, score
         `;
 
         const result = await session.run(query, {
             embedding,
-            limit
+            limit: intLimit // Pass the integer limit
         });
 
         return result.records.map(record => ({
@@ -324,24 +351,32 @@ export class DocuGraphRAG {
                 // Prepare context for LLM
                 const context = chunks.map(chunk => chunk.text).join('\n\n');
                 
-                // Get answer from LLM
-                this.log('Getting answer from LLM');
-                const answer = await this.llm.chat([
-                    {
-                        role: 'system',
-                        content: `You are a helpful assistant. Answer questions based on the following context:\n\n${context}`
-                    },
-                    {
-                        role: 'user',
-                        content: question
-                    }
-                ]);
-
-                return {
-                    answer,
-                    chunks,
-                    context
-                };
+                // Get streaming answer from LLM
+                this.log('Getting streaming answer from LLM');
+                if (options.onData) {
+                    // If streaming callback is provided, use streaming mode
+                    await this.llm.generateStreamingAnswer(question, context, {
+                        onData: (data) => {
+                            options.onData({ answer: data, done: false });
+                        },
+                        onEnd: () => {
+                            options.onData({ done: true });
+                        },
+                        onError: (error) => {
+                            console.error('[DocuGraphRAG] Streaming error:', error);
+                            options.onData({ error: error.message, done: true });
+                        }
+                    });
+                    return null; // Return null as we're streaming the response
+                } else {
+                    // If no streaming callback, get complete response
+                    const answer = await this.llm.generateAnswer(question, context);
+                    return {
+                        answer,
+                        chunks,
+                        context
+                    };
+                }
             } finally {
                 await session.close();
             }

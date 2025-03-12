@@ -172,65 +172,28 @@ app.post('/chat', async (req, res) => {
             });
         }
 
-        // Get all document IDs for the user
-        const result = await session.run(
-            `MATCH (d:Document) 
-             WHERE d.userId = $userId 
-             RETURN d.id`,
-            { userId: HARDCODED_USER_ID }
-        );
-        
-        const documentIds = result.records.map(record => record.get('d.id'));
-        
-        if (documentIds.length === 0) {
-            return res.status(404).json({
-                success: false,
-                error: 'No documents found for user'
-            });
-        }
-
         // Configure SSE headers
         res.setHeader('Content-Type', 'text/event-stream');
         res.setHeader('Cache-Control', 'no-cache');
         res.setHeader('Connection', 'keep-alive');
 
-        // Chat with all documents
+        // Chat with streaming response
         await docuRAG.chat(message, {
-            documentIds, // Pass array of document IDs
             onData: (data) => {
-                try {
-                    // Send the content and any source information
-                    res.write(`data: ${JSON.stringify({
-                        content: data.content,
-                        sources: data.sources?.map(source => ({
-                            fileName: source.fileName,
-                            text: source.text.substring(0, 150) + '...' // Send preview of source text
-                        }))
-                    })}\n\n`);
-                } catch (error) {
-                    console.error('Stream write error:', error);
-                    res.write(`data: ${JSON.stringify({ 
-                        success: false, 
-                        error: 'Error streaming response' 
-                    })}\n\n`);
+                if (data.error) {
+                    res.write(`data: ${JSON.stringify({ error: data.error })}\n\n`);
                     res.end();
+                    return;
                 }
-            },
-            onEnd: () => {
-                try {
+                
+                if (data.answer) {
+                    res.write(`data: ${JSON.stringify({ content: data.answer })}\n\n`);
+                }
+                
+                if (data.done) {
                     res.write('data: [DONE]\n\n');
                     res.end();
-                } catch (error) {
-                    console.error('Stream end error:', error);
                 }
-            },
-            onError: (error) => {
-                console.error('Chat processing error:', error);
-                res.write(`data: ${JSON.stringify({ 
-                    success: false, 
-                    error: 'Failed to process chat message' 
-                })}\n\n`);
-                res.end();
             }
         });
     } catch (error) {
@@ -240,6 +203,9 @@ app.post('/chat', async (req, res) => {
                 success: false, 
                 error: 'Failed to process chat message' 
             });
+        } else {
+            res.write(`data: ${JSON.stringify({ error: 'Failed to process chat message' })}\n\n`);
+            res.end();
         }
     } finally {
         await session.close();
