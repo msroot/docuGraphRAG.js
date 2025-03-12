@@ -1,17 +1,24 @@
 import pdfParse from 'pdf-parse';
 import { RecursiveCharacterTextSplitter } from 'langchain/text_splitter';
-import { createExtractor } from './extractors.js';
 import { v4 as uuidv4 } from 'uuid';
+import { InformationExtractor } from './extractors.js';
 
-export class DocumentProcessor {
+export class Processor {
     constructor(config = {}) {
+        if (!config.driver) {
+            throw new Error('Neo4j driver must be provided to Processor');
+        }
+
         this.config = {
+            ...config,
             chunkSize: 1000,
             chunkOverlap: 200,
             llmUrl: 'http://localhost:11434',
-            debug: false,
-            ...config
+            debug: false
         };
+
+        this.debug = this.config.debug;
+        this.log('Processor initialized with driver:', config.driver ? 'Driver present' : 'No driver');
 
         this.textSplitter = new RecursiveCharacterTextSplitter({
             chunkSize: this.config.chunkSize,
@@ -19,18 +26,12 @@ export class DocumentProcessor {
             lengthFunction: (text) => text.length,
         });
 
-        this.extractor = createExtractor({
-            llmUrl: this.config.llmUrl,
-            llmModel: this.config.llmModel,
-            debug: this.config.debug
-        });
-
-        this.debug = this.config.debug;
+        this.extractor = this.createExtractor();
     }
 
     log(...args) {
         if (this.debug) {
-            console.log('[DocumentProcessor]', ...args);
+            console.log('[Processor]', ...args);
         }
     }
 
@@ -41,7 +42,7 @@ export class DocumentProcessor {
             this.log(`PDF text extraction complete. Extracted ${data.text.length} characters`);
             return data.text;
         } catch (error) {
-            console.error('[DocumentProcessor] Error extracting text from PDF:', error);
+            console.error('[Processor] Error extracting text from PDF:', error);
             throw new Error('Failed to extract text from PDF');
         }
     }
@@ -106,8 +107,17 @@ export class DocumentProcessor {
                 chunks: processedChunks
             };
         } catch (error) {
-            console.error('[DocumentProcessor] Error processing document:', error);
+            console.error('[Processor] Error processing document:', error);
             throw error;
         }
+    }
+
+    createExtractor() {
+        this.log('Creating extractor with driver:', this.config.driver ? 'Driver present' : 'No driver');
+        return new InformationExtractor({
+            driver: this.config.driver,
+            llm: this.config.llm,
+            debug: this.debug
+        });
     }
 } 
