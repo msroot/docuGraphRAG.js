@@ -497,7 +497,7 @@ Follow these rules strictly:
 9. Never use undefined variables in WHERE clauses
 10. Always connect all referenced nodes in the query path`;
 
-            this.log('Requesting database query generation for question:', question);
+            this.log('Requesting database query generation');
             const response = await this.makeRequest('/api/generate', {
                 prompt,
                 temperature: 0.2,
@@ -592,7 +592,7 @@ Follow these rules strictly:
 
             if (!validateQuery(query)) {
                 this.log('Query validation failed, using fallback query');
-                query = `
+                return `
                     MATCH (c:DocumentChunk)
                     OPTIONAL MATCH (c)-[:HAS_ENTITY]->(e:Entity)
                     WITH c, collect(e) as entities, count(e) as entityCount
@@ -613,17 +613,12 @@ Follow these rules strictly:
                 query = query.replace(/collect\([^)]+\)(?!\s+as\s+\w+)/, match => `${match} as entities`);
             }
 
-            // Log the final query with clear formatting
-            console.log('\n[Neo4j Query]', '-'.repeat(50));
-            console.log('Question:', question);
-            console.log('Generated Query:');
-            console.log(query.split('\n').map(line => '  ' + line).join('\n'));
-            console.log('-'.repeat(60), '\n');
-
+            this.log('Generated database query:', query);
             return query;
         } catch (error) {
             console.error('[LLMService] Error generating database query:', error);
-            const fallbackQuery = `
+            // Return a more robust fallback query
+            return `
                 MATCH (c:DocumentChunk)
                 OPTIONAL MATCH (c)-[:HAS_ENTITY]->(e:Entity)
                 WITH c, collect(e) as entities, count(e) as entityCount
@@ -634,15 +629,6 @@ Follow these rules strictly:
                 ORDER BY entityCount DESC
                 LIMIT 5
             `;
-
-            // Log the fallback query
-            console.log('\n[Neo4j Query - Fallback]', '-'.repeat(40));
-            console.log('Question:', question);
-            console.log('Using fallback query due to error:', error.message);
-            console.log(fallbackQuery.split('\n').map(line => '  ' + line).join('\n'));
-            console.log('-'.repeat(60), '\n');
-
-            return fallbackQuery;
         }
     }
 } 
