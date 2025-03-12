@@ -1,5 +1,4 @@
 import nlp from 'compromise';
-import rake from 'node-rake';
 import axios from 'axios';
 
 export class InformationExtractor {
@@ -38,47 +37,45 @@ export class InformationExtractor {
             if (!text || typeof text !== 'string' || text.trim().length === 0) {
                 return [];
             }
-            
-            // Try node-rake first
-            try {
-                const keywords = rake.generate(text.trim());
-                if (Array.isArray(keywords) && keywords.length > 0) {
-                    return keywords;
-                }
-            } catch (rakeError) {
-                console.warn('Warning: node-rake extraction failed, falling back to compromise:', rakeError.message);
-            }
 
-            // Fallback to compromise for keyword extraction
             const doc = nlp(text);
-            const keywords = [];
-            
-            // Extract nouns and noun phrases
+            const keywords = new Set();
+
+            // Extract nouns and noun phrases (most important)
             doc.nouns().forEach(match => {
-                const phrase = match.text().trim();
+                const phrase = match.text().trim().toLowerCase();
                 if (phrase && phrase.length > 1) {
-                    keywords.push(phrase);
+                    keywords.add(phrase);
                 }
             });
 
-            // Extract verbs that might be technical terms
-            doc.verbs().forEach(match => {
-                const word = match.text().trim();
-                if (word && word.length > 1 && !word.match(/^(is|are|was|were|be|been|being|have|has|had)$/)) {
-                    keywords.push(word);
+            // Extract technical terms and acronyms
+            doc.match('#Acronym|#Technical').forEach(match => {
+                const term = match.text().trim().toLowerCase();
+                if (term && term.length > 1) {
+                    keywords.add(term);
                 }
             });
 
-            // Extract adjectives that might be domain-specific
+            // Extract important adjectives (especially technical ones)
             doc.adjectives().forEach(match => {
-                const word = match.text().trim();
+                const word = match.text().trim().toLowerCase();
                 if (word && word.length > 1) {
-                    keywords.push(word);
+                    keywords.add(word);
                 }
             });
 
-            // Remove duplicates and return
-            return [...new Set(keywords)];
+            // Extract significant verbs (filtering out common ones)
+            doc.verbs()
+                .filter(m => !m.has('#Copula')) // Remove being verbs (is, are, etc.)
+                .forEach(match => {
+                    const word = match.text().trim().toLowerCase();
+                    if (word && word.length > 1) {
+                        keywords.add(word);
+                    }
+                });
+
+            return Array.from(keywords);
         } catch (error) {
             console.warn('Warning: Error extracting keywords:', error.message);
             return [];
@@ -134,6 +131,7 @@ Concepts:`;
             // Parse and clean up concepts
             try {
                 // First try splitting by comma
+                console.log(conceptText)
                 let concepts = conceptText.split(',')
                     .map(concept => concept.trim())
                     .filter(concept => concept.length > 0);
