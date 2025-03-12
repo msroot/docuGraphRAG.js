@@ -9,7 +9,6 @@ export class DocuGraphRAG {
             neo4jUrl: 'bolt://localhost:7687',
             neo4jUser: 'neo4j',
             neo4jPassword: 'password123',
-            vectorSize: 3072,
             llmUrl: 'http://localhost:11434',
             llmModel: 'mistral',
             chunkSize: 1000,
@@ -54,44 +53,19 @@ export class DocuGraphRAG {
                 await session.run('CREATE CONSTRAINT document_id IF NOT EXISTS FOR (d:Document) REQUIRE d.id IS UNIQUE');
                 await session.run('CREATE CONSTRAINT document_chunk_id IF NOT EXISTS FOR (c:DocumentChunk) REQUIRE c.id IS UNIQUE');
                 
-                // Entity, Keyword, and Concept constraints
+                // Entity constraint
                 await session.run('CREATE CONSTRAINT entity_text_type IF NOT EXISTS FOR (e:Entity) REQUIRE (e.text, e.type) IS UNIQUE');
-                await session.run('CREATE CONSTRAINT keyword_text IF NOT EXISTS FOR (k:Keyword) REQUIRE k.text IS UNIQUE');
-                await session.run('CREATE CONSTRAINT concept_text IF NOT EXISTS FOR (c:Concept) REQUIRE c.text IS UNIQUE');
 
-                // Create vector index for embeddings if Neo4j version supports it
-                try {
-                    await session.run(
-                        'CREATE VECTOR INDEX document_chunk_embedding IF NOT EXISTS ' +
-                        'FOR (c:DocumentChunk) ' +
-                        'ON (c.embedding) ' +
-                        'OPTIONS { ' +
-                        '    indexConfig: { ' +
-                        '        vector.dimensions: 3072, ' +
-                        '        vector.similarity_function: "cosine" ' +
-                        '    } ' +
-                        '}'
-                    );
-                } catch (error) {
-                    console.warn('Vector index creation failed. Vector similarity will be calculated manually:', error.message);
-                }
             } finally {
                 await session.close();
             }
 
-            // Initialize processor with shared services
+            // Initialize processor
             const processorConfig = {
-                driver: this.driver,
-                llm: this.llm,
                 ...this.config
             };
             
-            this.log('Creating Processor with config:', {
-                ...processorConfig,
-                driver: 'Neo4j Driver Instance',
-                llm: 'LLM Service Instance'
-            });
-            
+            this.log('Creating Processor with config:', processorConfig);
             this.processor = new DocumentProcessor(processorConfig);
 
             this.log('Initialization complete');
@@ -103,63 +77,6 @@ export class DocuGraphRAG {
             }
             throw error;
         }
-    }
-
-    async getEmbeddings(text) {
-        return this.llm.getEmbeddings(text);
-    }
-
-    async createSemanticNode(tx, type, data, chunkId, documentId) {
-        const nodeConfig = {
-            Entity: {
-                label: 'Entity',
-                properties: { 
-                    text: data.text, 
-                    type: data.type,
-                    ...data.details // Include additional entity details
-                },
-                chunkRel: 'HAS_ENTITY',
-                docRel: 'CONTAINS_ENTITY'
-            },
-            Keyword: {
-                label: 'Keyword',
-                properties: { text: data },
-                chunkRel: 'HAS_KEYWORD',
-                docRel: 'CONTAINS_KEYWORD'
-            },
-            Concept: {
-                label: 'Concept',
-                properties: { text: data },
-                chunkRel: 'EXPRESSES_CONCEPT',
-                docRel: 'CONTAINS_CONCEPT'
-            }
-        };
-
-        const config = nodeConfig[type];
-        if (!config) {
-            throw new Error(`Unsupported semantic node type: ${type}`);
-        }
-
-        // Create/merge node and create relationships in a single query
-        await tx.run(`
-            MATCH (c:DocumentChunk {id: $chunkId})
-            MERGE (n:${config.label} ${this.createPropertiesString(config.properties)})
-            MERGE (c)-[:${config.chunkRel}]->(n)
-            WITH c, n
-            MATCH (d:Document {id: c.documentId})
-            MERGE (d)-[:${config.docRel}]->(n)
-            RETURN n
-        `, {
-            chunkId,
-            ...config.properties
-        });
-    }
-
-    createPropertiesString(properties) {
-        const props = Object.entries(properties)
-            .map(([key, value]) => `${key}: $${key}`)
-            .join(', ');
-        return `{${props}}`;
     }
 
     async processDocument(buffer, fileName) {
@@ -174,22 +91,8 @@ export class DocuGraphRAG {
                 totalChunks: chunks.length 
             });
 
-            // Get embeddings for each chunk
-            this.log('Step 2: Getting embeddings for chunks');
-            const chunksWithEmbeddings = await Promise.all(
-                chunks.map(async (chunk, index) => {
-                    this.log(`Getting embeddings for chunk ${index + 1}/${chunks.length}`);
-                    const withEmbedding = {
-                        ...chunk,
-                        embedding: await this.getEmbeddings(chunk.text)
-                    };
-                    this.log(`Embeddings complete for chunk ${index + 1}`);
-                    return withEmbedding;
-                })
-            );
-
             // Store in Neo4j
-            this.log('Step 3: Storing document and chunks in Neo4j');
+            this.log('Step 2: Storing document and chunks in Neo4j');
             const session = this.driver.session();
             try {
                 await session.executeWrite(async tx => {
@@ -204,8 +107,8 @@ export class DocuGraphRAG {
                         })
                     `, metadata);
 
-                    // Store chunks and their relationships
-                    for (const chunk of chunksWithEmbeddings) {
+                    // Process each chunk
+                    for (const chunk of chunks) {
                         // Create chunk node and connect to document
                         await tx.run(`
                             MATCH (d:Document {id: $documentId})
@@ -213,8 +116,7 @@ export class DocuGraphRAG {
                                 id: $chunkId,
                                 documentId: $documentId,
                                 content: $content,
-                                index: $index,
-                                embedding: $embedding
+                                index: $index
                             })
                             CREATE (d)-[:HAS_CHUNK]->(c)
                             RETURN c
@@ -222,43 +124,27 @@ export class DocuGraphRAG {
                             documentId: metadata.id,
                             chunkId: chunk.id,
                             content: chunk.text,
-                            index: chunk.chunkIndex,
-                            embedding: chunk.embedding
+                            index: chunk.chunkIndex
                         });
 
-                        // Process semantic nodes (entities, keywords, concepts)
-                        for (const entity of chunk.extractedInfo.entities) {
-                            if (!entity.text || !entity.type) continue;
-                            await this.createSemanticNode(tx, 'Entity', entity, chunk.id, metadata.id);
-                        }
-
-                        for (const keyword of chunk.extractedInfo.keywords) {
-                            if (!keyword || typeof keyword !== 'string') continue;
-                            await this.createSemanticNode(tx, 'Keyword', keyword, chunk.id, metadata.id);
-                        }
-
-                        for (const concept of chunk.extractedInfo.concepts) {
-                            if (!concept || typeof concept !== 'string') continue;
-                            await this.createSemanticNode(tx, 'Concept', concept, chunk.id, metadata.id);
-                        }
-
-                        // Process LLM-extracted relationships
-                        if (chunk.extractedInfo.relationships) {
-                            for (const rel of chunk.extractedInfo.relationships) {
-                                await tx.run(`
-                                    MATCH (source:Entity {text: $sourceText})
-                                    MATCH (target:Entity {text: $targetText})
-                                    MERGE (source)-[r:${rel.relationship}]->(target)
-                                    SET r.confidence = $confidence,
-                                        r.extractedFrom = $chunkId
-                                    RETURN r
-                                `, {
-                                    sourceText: rel.source,
-                                    targetText: rel.target,
-                                    confidence: 0.8, // Default confidence score
-                                    chunkId: chunk.id
-                                });
+                        // Generate and execute Cypher query for the chunk's content
+                        try {
+                            this.log(`Generating Cypher query for chunk ${chunk.id}`);
+                            const cypherQuery = await this.llm.generateCypherQuery(chunk.text);
+                            
+                            if (cypherQuery) {
+                                this.log(`Executing generated Cypher query for chunk ${chunk.id}`);
+                                // Add WITH clause to connect with the chunk
+                                const queryWithChunk = `
+                                    MATCH (c:DocumentChunk {id: $chunkId})
+                                    WITH c
+                                    ${cypherQuery}
+                                `;
+                                await tx.run(queryWithChunk, { chunkId: chunk.id });
                             }
+                        } catch (error) {
+                            console.error(`Error processing relationships for chunk ${chunk.id}:`, error);
+                            // Continue with next chunk even if this one fails
                         }
                     }
                 });
@@ -274,85 +160,77 @@ export class DocuGraphRAG {
         }
     }
 
-    async vectorSearch(session, embedding, limit, useVectorIndex = true) {
-        // Ensure limit is an integer
-        const intLimit = Math.floor(Number(limit));
-        
-        const query = useVectorIndex ? `
-            MATCH (c:DocumentChunk)
-            WITH c, vector.similarity(c.embedding, $embedding) AS score
-            WHERE score > 0.7
-            OPTIONAL MATCH (c)-[:HAS_ENTITY]->(e)
-            OPTIONAL MATCH (c)-[:HAS_KEYWORD]->(k)
-            OPTIONAL MATCH (c)-[:EXPRESSES_CONCEPT]->(co)
-            WITH c, score,
-                 collect(DISTINCT {type: e.type, text: e.text}) as entities,
-                 collect(DISTINCT k.text) as keywords,
-                 collect(DISTINCT co.text) as concepts
-            ORDER BY score DESC
-            LIMIT toInteger($limit)
-            RETURN c.content AS text, c.documentId AS documentId,
-                   entities, keywords, concepts, score
-        ` : `
-            MATCH (c:DocumentChunk)
-            WITH c, reduce(acc = 0.0, i in range(0, size(c.embedding)-1) |
-                acc + c.embedding[i] * $embedding[i]) AS score
-            WHERE score > 0.7
-            OPTIONAL MATCH (c)-[:HAS_ENTITY]->(e)
-            OPTIONAL MATCH (c)-[:HAS_KEYWORD]->(k)
-            OPTIONAL MATCH (c)-[:EXPRESSES_CONCEPT]->(co)
-            WITH c, score,
-                 collect(DISTINCT {type: e.type, text: e.text}) as entities,
-                 collect(DISTINCT k.text) as keywords,
-                 collect(DISTINCT co.text) as concepts
-            ORDER BY score DESC
-            LIMIT toInteger($limit)
-            RETURN c.content AS text, c.documentId AS documentId,
-                   entities, keywords, concepts, score
-        `;
-
-        const result = await session.run(query, {
-            embedding,
-            limit: intLimit // Pass the integer limit
-        });
-
-        return result.records.map(record => ({
-            text: record.get('text'),
-            documentId: record.get('documentId'),
-            entities: record.get('entities'),
-            keywords: record.get('keywords'),
-            concepts: record.get('concepts'),
-            score: record.get('score')
-        }));
-    }
-
     async chat(question, options = {}) {
         try {
             this.log(`Processing chat question: ${question}`);
             
-            // Get embeddings for the question
-            this.log('Getting embeddings for question');
-            const questionEmbedding = await this.getEmbeddings(question);
+            // Step 1: Generate Neo4j query based on the question
+            this.log('Generating database query from question');
+            const dbQuery = await this.llm.generateDatabaseQuery(question);
             
-            // Search for relevant chunks
-            this.log('Searching for relevant chunks');
+            // Step 2: Execute the generated query to get relevant data
+            this.log('Executing generated database query');
             const session = this.driver.session();
             try {
-                let chunks;
-                try {
-                    // Try using vector index first
-                    chunks = await this.vectorSearch(session, questionEmbedding, this.config.searchLimit, true);
-                } catch (error) {
-                    // Fallback to manual calculation if vector index fails
-                    this.log('Vector index search failed, falling back to manual calculation');
-                    chunks = await this.vectorSearch(session, questionEmbedding, this.config.searchLimit, false);
-                }
-
-                // Prepare context for LLM
-                const context = chunks.map(chunk => chunk.text).join('\n\n');
+                const result = await session.run(dbQuery);
                 
-                // Get streaming answer from LLM
-                this.log('Getting streaming answer from LLM');
+                // Log query results
+                console.log('\n[Neo4j Results]', '-'.repeat(47));
+                console.log('Records found:', result.records.length);
+                
+                // Extract and format the context from the query results
+                let contextParts = [];
+                
+                result.records.forEach((record, index) => {
+                    console.log(`\nRecord ${index + 1}:`);
+                    
+                    // Get all available keys from the record
+                    const keys = record.keys;
+                    
+                    // Add content if present
+                    const content = record.get('content') || record.get('c.content');
+                    if (content) {
+                        contextParts.push(content);
+                        console.log('Content:', content.substring(0, 150) + '...');
+                    }
+                    
+                    // Add entity information if present
+                    const entities = record.get('entities');
+                    if (entities && Array.isArray(entities) && entities.length > 0) {
+                        const entityContext = entities
+                            .map(e => `${e.type}: ${e.text}${e.details ? ` (${JSON.stringify(e.details)})` : ''}`)
+                            .join('\n');
+                        if (entityContext) {
+                            contextParts.push(`Related entities:\n${entityContext}`);
+                            console.log('Entities:', entities.map(e => `${e.type}: ${e.text}`));
+                        }
+                    }
+
+                    // Add any other relevant information from the record
+                    keys.forEach(key => {
+                        if (key !== 'content' && key !== 'entities') {
+                            const value = record.get(key);
+                            if (value !== null && value !== undefined) {
+                                if (Array.isArray(value)) {
+                                    contextParts.push(`${key}:\n${value.join('\n')}`);
+                                    console.log(`${key}:`, value.length, 'items');
+                                } else if (typeof value === 'object') {
+                                    contextParts.push(`${key}: ${JSON.stringify(value, null, 2)}`);
+                                    console.log(`${key}:`, JSON.stringify(value));
+                                } else {
+                                    contextParts.push(`${key}: ${value}`);
+                                    console.log(`${key}:`, value);
+                                }
+                            }
+                        }
+                    });
+                });
+                console.log('-'.repeat(60), '\n');
+
+                const context = contextParts.join('\n\n');
+                
+                // Step 3: Get answer from LLM using the context
+                this.log('Getting answer from LLM with context');
                 if (options.onData) {
                     // If streaming callback is provided, use streaming mode
                     await this.llm.generateStreamingAnswer(question, context, {
@@ -373,7 +251,6 @@ export class DocuGraphRAG {
                     const answer = await this.llm.generateAnswer(question, context);
                     return {
                         answer,
-                        chunks,
                         context
                     };
                 }

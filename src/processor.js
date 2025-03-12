@@ -1,32 +1,23 @@
 import pdfParse from 'pdf-parse';
 import { RecursiveCharacterTextSplitter } from 'langchain/text_splitter';
 import { v4 as uuidv4 } from 'uuid';
-import { InformationExtractor } from './extractors.js';
 
 export class Processor {
     constructor(config = {}) {
-        if (!config.driver) {
-            throw new Error('Neo4j driver must be provided to Processor');
-        }
-
         this.config = {
-            ...config,
             chunkSize: 1000,
             chunkOverlap: 200,
-            llmUrl: 'http://localhost:11434',
-            debug: false
+            debug: false,
+            ...config
         };
 
         this.debug = this.config.debug;
-        this.log('Processor initialized with driver:', config.driver ? 'Driver present' : 'No driver');
-
+        
         this.textSplitter = new RecursiveCharacterTextSplitter({
             chunkSize: this.config.chunkSize,
             chunkOverlap: this.config.chunkOverlap,
             lengthFunction: (text) => text.length,
         });
-
-        this.extractor = this.createExtractor();
     }
 
     log(...args) {
@@ -66,25 +57,12 @@ export class Processor {
             const chunks = await this.textSplitter.splitText(text);
             this.log(`Text splitting complete. Created ${chunks.length} chunks`);
 
-            // 3. Process each chunk in parallel
-            this.log('Step 3: Processing chunks and extracting information');
-            const processedChunks = await Promise.all(chunks.map(async (chunk, index) => {
-                this.log(`Processing chunk ${index + 1}/${chunks.length}`);
-                // 3.1 Extract information
-                const extractedInfo = await this.extractor.extractAll(chunk);
-                this.log(`Chunk ${index + 1} processing complete`, {
-                    entities: extractedInfo.entities.length,
-                    keywords: extractedInfo.keywords.length,
-                    concepts: extractedInfo.concepts.length
-                });
-
-                // 3.2 Create chunk metadata
-                return {
-                    id: uuidv4(),
-                    text: chunk,
-                    chunkIndex: index,
-                    extractedInfo
-                };
+            // 3. Process each chunk
+            this.log('Step 3: Creating chunk objects');
+            const processedChunks = chunks.map((chunk, index) => ({
+                id: uuidv4(),
+                text: chunk,
+                chunkIndex: index
             }));
 
             // 4. Create document metadata
@@ -110,14 +88,5 @@ export class Processor {
             console.error('[Processor] Error processing document:', error);
             throw error;
         }
-    }
-
-    createExtractor() {
-        this.log('Creating extractor with driver:', this.config.driver ? 'Driver present' : 'No driver');
-        return new InformationExtractor({
-            driver: this.config.driver,
-            llm: this.config.llm,
-            debug: this.debug
-        });
     }
 } 
