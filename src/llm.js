@@ -83,7 +83,8 @@ export class LLMService {
             const response = await axios.post('http://localhost:11434/api/generate', {
                 model: this.config.model,
                 prompt: prompt,
-                temperature: temperature
+                temperature: temperature,
+                stream: false
             });
 
             return response.data.response;
@@ -392,8 +393,10 @@ Follow these rules strictly:
 9. Never use undefined variables in WHERE clauses
 10. Always connect all referenced nodes in the query path`;
 
-            this.log('Requesting database query generation');
+            this.log('Requesting database query generation', prompt);
             const response = await this.queryLLM(prompt, 0.2);
+
+            this.log('LLM database query response', response);
             
             if (!response || !response.response) {
                 throw new Error('Empty response from LLM');

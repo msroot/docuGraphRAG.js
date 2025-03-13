@@ -148,16 +148,27 @@ app.post('/upload', upload.single('pdf'), async (req, res) => {
 
 app.post('/chat', async (req, res) => {
     try {
-        const { question } = req.body;
-        if (!question) {
-            return res.status(400).json({ error: 'Question is required' });
+        // Accept either 'question' or 'message' from the request body
+        const { question, message } = req.body;
+        const userQuery = question || message;
+        
+        console.log('Chat request:', { userQuery, originalBody: req.body });
+        
+        if (!userQuery) {
+            return res.status(400).json({ 
+                success: false, 
+                error: 'Question is required. Please provide either a "question" or "message" field in your request.' 
+            });
         }
 
-        const result = await docurag.chat(question);
+        const result = await docurag.chat(userQuery);
         res.json(result);
     } catch (error) {
         console.error('Error processing chat:', error);
-        res.status(500).json({ error: error.message });
+        res.status(500).json({ 
+            success: false,
+            error: error.message || 'An unexpected error occurred while processing your request.'
+        });
     }
 });
 
