@@ -1,6 +1,6 @@
 import express from 'express';
 import multer from 'multer';
-import { DocuGraphRAG } from '../../src/DocuGraphRAG.js';
+import { DocuGraphRAG } from '../../src/index.js';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -53,7 +53,7 @@ const docurag = new DocuGraphRAG({
     debug: process.env.DEBUG === 'true'
 });
 
-// Get all documents for a user
+// Get current document
 app.get('/documents', async (req, res) => {
     const session = driver.session();
     try {
@@ -126,10 +126,9 @@ app.post('/upload', upload.single('pdf'), async (req, res) => {
             });
         }
 
-        console.log('Processing file:', {
-            originalname: req.file.originalname,
-            mimetype: req.file.mimetype,
-            size: req.file.size
+        console.log('Handling file upload:', {
+            fileName: req.file.originalname,
+            fileSize: req.file.size
         });
 
         const result = await docurag.processDocument(req.file.buffer, req.file.originalname);
@@ -138,7 +137,7 @@ app.post('/upload', upload.single('pdf'), async (req, res) => {
             documentId: result.documentId
         });
     } catch (error) {
-        console.error('Error processing document:', error);
+        console.error('Error handling document:', error);
         res.status(500).json({ 
             success: false,
             error: error.message || 'Failed to process document'
@@ -164,36 +163,33 @@ app.post('/chat', async (req, res) => {
         const result = await docurag.chat(userQuery);
         res.json(result);
     } catch (error) {
-        console.error('Error processing chat:', error);
+        console.error('Error handling chat:', error);
         res.status(500).json({ 
             success: false,
-            error: error.message || 'An unexpected error occurred while processing your request.'
+            error: error.message || 'An unexpected error occurred with your request.'
         });
     }
 });
 
 // Cleanup endpoint
 app.post('/cleanup', async (req, res) => {
-    const session = driver.session();
     try {
-        // Clean up Neo4j data
-        await session.run('MATCH (d:Document) DETACH DELETE d');
-        
-        // Clean up DocuRAG resources
+        // Clean up all document data and resources using DocuGraphRAG
         await docurag.cleanup();
+        
+        // Reinitialize DocuGraphRAG for future use
+        await docurag.initialize();
         
         res.json({ 
             success: true, 
-            message: 'Resources cleaned up successfully' 
+            message: 'Document removed successfully' 
         });
     } catch (error) {
         console.error('Cleanup error:', error);
         res.status(500).json({ 
             success: false, 
-            error: 'Failed to cleanup resources' 
+            error: error.message || 'Failed to remove document' 
         });
-    } finally {
-        await session.close();
     }
 });
 
@@ -216,8 +212,13 @@ async function startServer() {
             console.log('Received SIGTERM. Performing graceful shutdown...');
             await driver.close();
             server.close(async () => {
-                await docurag.cleanup();
-                process.exit(0);
+                try {
+                    await docurag.cleanup();
+                } catch (error) {
+                    console.error('Error during shutdown cleanup:', error);
+                } finally {
+                    process.exit(0);
+                }
             });
         });
     } catch (error) {

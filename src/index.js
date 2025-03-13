@@ -2,11 +2,10 @@ import axios from 'axios';
 import neo4j from 'neo4j-driver';
 import { Processor as DocumentProcessor } from './processor.js';
 import { LLMService } from './llm.js';
-import { DatabaseSeeder } from './seedDb.js';
+import { DatabaseSeeder } from './seed.js';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import exp from 'constants';
 
 // Get the directory name of the current module
 const __filename = fileURLToPath(import.meta.url);
@@ -101,12 +100,14 @@ export class DocuGraphRAG {
             chunkSize: 1000,
             chunkOverlap: 200,
             searchLimit: 3,
-            debug: true,
+            debug: process.env.DEBUG === 'true' || config.debug === true,
             ...config
         };
 
         this.debug = this.config.debug;
+        this.initialized = false;
         this.driver = null;
+        this.processor = null;
         this.llm = null;
 
         // Make constants available as class properties
@@ -114,14 +115,6 @@ export class DocuGraphRAG {
         this.NODE_LABELS = NODE_LABELS;
         this.ENTITY_TYPES = ENTITY_TYPES;
         this.NODE_PROPERTIES = NODE_PROPERTIES;
-
-        // Initialize database seeder
-        this.dbSeeder = new DatabaseSeeder(
-            this.NODE_LABELS,
-            this.RELATIONSHIPS,
-            this.ENTITY_TYPES,
-            this.NODE_PROPERTIES
-        );
     }
 
     log(step, methodName, message, context = {}) {
@@ -138,6 +131,10 @@ export class DocuGraphRAG {
     }
 
     async initialize() {
+        if (this.initialized) {
+            return;
+        }
+
         try {
             // Initialize Neo4j driver
             this.driver = neo4j.driver(
@@ -145,32 +142,32 @@ export class DocuGraphRAG {
                 neo4j.auth.basic(this.config.neo4jUser, this.config.neo4jPassword)
             );
 
-            // Initialize LLM service
-            this.llm = new LLMService({
-                ...this.config,
-                driver: this.driver
+            // Initialize document processor
+            this.processor = new DocumentProcessor({
+                debug: this.debug
             });
 
-            // Create necessary constraints and indexes
+            // Initialize LLM service
+            this.llm = new LLMService({
+                driver: this.driver,
+                debug: this.debug
+            });
+            
+            // Initialize the LLM service to fetch the schema once
+            await this.llm.initialize();
+
+            // Initialize database with constraints and indexes
             const session = this.driver.session();
             try {
-                await this.dbSeeder.seed(session);
+                const seeder = new DatabaseSeeder(NODE_LABELS, RELATIONSHIPS, ENTITY_TYPES, NODE_PROPERTIES);
+                await seeder.seed(session);
             } finally {
                 await session.close();
             }
 
-            // Initialize processor
-            const processorConfig = {
-                ...this.config
-            };
-            
-            this.processor = new DocumentProcessor(processorConfig);
-
+            this.initialized = true;
         } catch (error) {
-            if (this.driver) {
-                await this.driver.close();
-                this.driver = null;
-            }
+            console.error('Failed to initialize DocuGraphRAG:', error);
             throw error;
         }
     }
@@ -739,6 +736,62 @@ export class DocuGraphRAG {
             }));
         } finally {
             await session.close();
+        }
+    }
+
+    async cleanup() {
+        this.log('1', 'cleanup', 'Starting cleanup process');
+        
+        try {
+            // Delete all document-related data from the database
+            if (this.driver) {
+                const session = this.driver.session();
+                try {
+                    this.log('2', 'cleanup', 'Deleting all document data from Neo4j');
+                    
+                    // Use a single transaction to delete all document-related data
+                    await session.executeWrite(async tx => {
+                        // Delete all entity relationships first
+                        await tx.run(`
+                            MATCH ()-[r]->() 
+                            WHERE type(r) IN ['${Object.values(this.RELATIONSHIPS).join("','")}']
+                            DELETE r
+                        `);
+                        
+                        // Delete all nodes in one query
+                        await tx.run(`
+                            MATCH (n)
+                            WHERE n:${this.NODE_LABELS.ENTITY} OR 
+                                  n:${this.NODE_LABELS.DOCUMENT_CHUNK} OR 
+                                  n:${this.NODE_LABELS.DOCUMENT}
+                            DELETE n
+                        `);
+                    });
+                    
+                    this.log('3', 'cleanup', 'Successfully deleted all document data');
+                } catch (dbError) {
+                    this.log('ERROR', 'cleanup', 'Error deleting document data', { error: dbError.message });
+                    throw dbError;
+                } finally {
+                    await session.close();
+                }
+                
+                // Close Neo4j driver
+                this.log('4', 'cleanup', 'Closing Neo4j driver');
+                await this.driver.close();
+                this.driver = null;
+            }
+            
+            // Reset state
+            this.initialized = false;
+            this.processor = null;
+            this.llm = null;
+            
+            this.log('5', 'cleanup', 'Cleanup completed successfully');
+            return true;
+        } catch (error) {
+            this.log('ERROR', 'cleanup', 'Error during cleanup', { error: error.message });
+            throw error;
         }
     }
 }

@@ -47,25 +47,21 @@ export class Processor {
 
             const text = await this.extractTextFromPDF(buffer);
             const chunks = await this.textSplitter.splitText(text);
-            const documentId = uuidv4()
+            const documentId = uuidv4();
             
-
             const processedChunks = chunks.map((chunk, index) => ({
                 text: chunk,
                 chunkIndex: index,
                 documentId
             }));
-
             
             const metadata = {
-                documentId ,
+                documentId,
                 fileName,
                 fileType: 'pdf',
                 uploadDate: new Date().toISOString(),
                 totalChunks: processedChunks.length
             };
-
-           
 
             return {
                 metadata,

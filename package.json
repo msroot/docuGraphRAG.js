@@ -13,7 +13,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "mkdir -p dist && cp -r src dist/ && cp index.js dist/",
+    "build": "rm -rf dist && mkdir -p dist/src && cp -r src/*.js dist/src/ && cp index.js dist/",
     "prepublishOnly": "npm run build"
   },
   "keywords": [

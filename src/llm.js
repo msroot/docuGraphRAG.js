@@ -1,12 +1,17 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
 import axios from 'axios';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+// Get the directory name of the current module
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const LLM_CONFIG = {
     MODEL: 'mistral',
     MAX_RETRIES: 3,
     RETRY_DELAY: 1000,
     TIMEOUT: 30000,
-    SCHEMA_CACHE_DURATION: 600000, // 10 minutes in milliseconds
     DEBUG: false
 };
 
@@ -42,6 +47,56 @@ const NODE_PROPERTIES = {
     TYPE: 'type'
 };
 
+// Default schema structure to use if database query fails
+const DEFAULT_SCHEMA = {
+    nodes: {
+        "Document": [
+            "documentId",
+            "fileName",
+            "fileType",
+            "uploadDate",
+            "totalChunks",
+            "content"
+        ],
+        "DocumentChunk": [
+            "documentId",
+            "content",
+            "index",
+            "startChar",
+            "endChar"
+        ],
+        "Entity": [
+            "text",
+            "type",
+            "documentId",
+            "startChar",
+            "endChar",
+            "description",
+            "lemma",
+            "pos",
+            "dep",
+            "isRoot",
+            "syntacticRole",
+            "morphology",
+            "confidenceScore"
+        ]
+    },
+    relationships: [
+        "HAS_CHUNK",
+        "HAS_ENTITY",
+        "HAS_KEYWORD",
+        "EXPRESSES_CONCEPT",
+        "CONTAINS_ENTITY",
+        "CONTAINS_KEYWORD",
+        "CONTAINS_CONCEPT",
+        "MENTIONS",
+        "RELATED_TO",
+        "PRECEDES",
+        "OVERLAPS",
+        "CONTAINS"
+    ]
+};
+
 export class LLMService {
     constructor(config = {}) {
         this.config = {
@@ -49,14 +104,78 @@ export class LLMService {
             debug: config.debug ?? LLM_CONFIG.DEBUG,
             maxRetries: config.maxRetries || LLM_CONFIG.MAX_RETRIES,
             retryDelay: config.retryDelay || LLM_CONFIG.RETRY_DELAY,
-            timeout: config.timeout || LLM_CONFIG.TIMEOUT,
-            schemaCacheDuration: config.schemaCacheDuration || LLM_CONFIG.SCHEMA_CACHE_DURATION
+            timeout: config.timeout || LLM_CONFIG.TIMEOUT
         };
 
         this.debug = this.config.debug;
         this.driver = config.driver; // Neo4j driver instance
-        this.dbSchema = null; // Cached schema
-        this.schemaLastUpdated = null;
+        this.dbSchema = null; // Will be populated during initialization
+    }
+
+    async initialize() {
+        // Make a single database request to get the schema
+        if (this.driver) {
+            try {
+                this.log('Fetching database schema...');
+                const schema = await this.fetchSchemaFromDatabase();
+                this.dbSchema = schema;
+                this.log('Database schema loaded successfully');
+            } catch (error) {
+                this.log('Error fetching database schema, using default schema:', error);
+                this.dbSchema = this.getDefaultSchema();
+            }
+        } else {
+            this.log('No Neo4j driver provided, using default schema');
+            this.dbSchema = this.getDefaultSchema();
+        }
+        return this;
+    }
+
+    getDefaultSchema() {
+        return {
+            nodes: DEFAULT_SCHEMA.nodes,
+            relationships: new Set(DEFAULT_SCHEMA.relationships)
+        };
+    }
+
+    async fetchSchemaFromDatabase() {
+        const session = this.driver.session();
+        try {
+            // Query to get node labels and their properties
+            const nodeResult = await session.run(`
+                CALL apoc.meta.schema() YIELD value
+                RETURN value
+            `);
+            
+            const nodes = {};
+            const relationships = new Set();
+            
+            if (nodeResult.records.length > 0) {
+                const schemaData = nodeResult.records[0].get('value');
+                
+                // Process nodes and their properties
+                for (const [nodeLabel, nodeData] of Object.entries(schemaData)) {
+                    if (nodeData.type === 'node') {
+                        nodes[nodeLabel] = Object.keys(nodeData.properties);
+                    }
+                }
+                
+                // Get relationship types
+                const relResult = await session.run(`
+                    CALL db.relationshipTypes() YIELD relationshipType
+                    RETURN collect(relationshipType) as types
+                `);
+                
+                if (relResult.records.length > 0) {
+                    const relTypes = relResult.records[0].get('types');
+                    relTypes.forEach(type => relationships.add(type));
+                }
+            }
+            
+            return { nodes, relationships };
+        } finally {
+            await session.close();
+        }
     }
 
     log(...args) {
@@ -106,28 +225,53 @@ export class LLMService {
                 responseType: 'stream'
             });
 
-            response.data.on('data', chunk => {
-                try {
-                    const data = JSON.parse(chunk.toString());
-                    if (data.response) {
-                        callbacks.onData?.(data.response);
+            let buffer = '';
+            
+            response.data.on('data', (chunk) => {
+                const chunkStr = chunk.toString();
+                buffer += chunkStr;
+                
+                // Process complete JSON objects
+                let startIdx = 0;
+                let endIdx = buffer.indexOf('\n', startIdx);
+                
+                while (endIdx !== -1) {
+                    const jsonStr = buffer.substring(startIdx, endIdx);
+                    startIdx = endIdx + 1;
+                    endIdx = buffer.indexOf('\n', startIdx);
+                    
+                    try {
+                        const data = JSON.parse(jsonStr);
+                        if (data.response && callbacks.onData) {
+                            callbacks.onData(data.response);
+                        }
+                    } catch (e) {
+                        // Skip invalid JSON
                     }
-                    if (data.done) {
-                        callbacks.onEnd?.();
-                    }
-                } catch (error) {
-                    console.error(`[LLMService][${this.config.model}] Error parsing stream chunk:`, error);
-                    callbacks.onError?.(error);
+                }
+                
+                // Keep the remaining incomplete JSON
+                buffer = buffer.substring(startIdx);
+            });
+            
+            response.data.on('end', () => {
+                if (callbacks.onEnd) {
+                    callbacks.onEnd();
                 }
             });
-
-            response.data.on('error', error => {
-                console.error(`[LLMService][${this.config.model}] Stream error:`, error);
-                callbacks.onError?.(error);
+            
+            response.data.on('error', (error) => {
+                if (callbacks.onError) {
+                    callbacks.onError(error);
+                }
             });
+            
         } catch (error) {
-            console.error(`[LLMService][${this.config.model}] Stream error:`, error);
-            callbacks.onError?.(error);
+            if (callbacks.onError) {
+                callbacks.onError(error);
+            } else {
+                throw error;
+            }
         }
     }
 
@@ -195,12 +339,12 @@ Text: ${text}
             this.log('Requesting entity analysis');
             const response = await this.queryLLM(prompt, 0.1);
 
-            if (!response || !response.response) {
+            if (!response) {
                 return null;
             }
 
             // Split response into lines and process each line
-            const lines = response.response.split('\n')
+            const lines = response.split('\n')
                 .map(line => line.trim())
                 .filter(line => line && line !== 'NONE');
 
@@ -249,125 +393,23 @@ Text: ${text}
         }
     }
 
-    async refreshDbSchema() {
-        try {
-            const session = this.driver.session();
-            const schema = {
-                nodes: {},
-                relationships: new Set()
-            };
-
-            try {
-                // Get node labels and their properties using CALL db.schema.nodeTypeProperties()
-                const nodeResult = await session.run(`
-                    CALL db.schema.nodeTypeProperties()
-                    YIELD nodeType, propertyName
-                    RETURN nodeType, collect(propertyName) as properties
-                `);
-
-                for (const record of nodeResult.records) {
-                    const nodeType = record.get('nodeType');
-                    const properties = record.get('properties');
-                    schema.nodes[nodeType] = properties;
-                }
-
-                // Get relationship types using MATCH pattern
-                const relResult = await session.run(`
-                    MATCH ()-[r]->() 
-                    RETURN DISTINCT type(r) as relationshipType
-                `);
-
-                for (const record of relResult.records) {
-                    schema.relationships.add(record.get('relationshipType'));
-                }
-
-                // If no relationships found in DB, use default ones
-                if (schema.relationships.size === 0) {
-                    Object.values(RELATIONSHIPS).forEach(rel => 
-                        schema.relationships.add(rel)
-                    );
-                }
-
-                // If no nodes found in DB, use default ones
-                if (Object.keys(schema.nodes).length === 0) {
-                    Object.entries(NODE_LABELS).forEach(([_, label]) => {
-                        schema.nodes[label] = Object.values(NODE_PROPERTIES);
-                    });
-                }
-
-                this.dbSchema = schema;
-                this.schemaLastUpdated = Date.now();
-                return schema;
-            } finally {
-                await session.close();
-            }
-        } catch (error) {
-            console.error('[LLMService] Error fetching database schema:', error);
-            // Fallback to default schema
-            const defaultSchema = {
-                nodes: {},
-                relationships: new Set(Object.values(RELATIONSHIPS))
-            };
-            
-            Object.entries(NODE_LABELS).forEach(([_, label]) => {
-                defaultSchema.nodes[label] = Object.values(NODE_PROPERTIES);
-            });
-            
-            this.dbSchema = defaultSchema;
-            this.schemaLastUpdated = Date.now();
-            return defaultSchema;
-        }
-    }
-
-    async getDbSchema() {
-        // If we have no cached schema or it's expired, refresh it
-        if (!this.dbSchema || 
-            !this.schemaLastUpdated || 
-            Date.now() - this.schemaLastUpdated > this.config.schemaCacheDuration) {
-            this.log('Schema cache expired or not present, refreshing...');
-            return await this.refreshDbSchema();
-        }
-        
-        this.log('Using cached schema');
-        return this.dbSchema;
-    }
-
-    // Add a method to force refresh the schema
-    async forceRefreshSchema() {
-        this.log('Forcing schema refresh');
-        return await this.refreshDbSchema();
-    }
-
     async generateDatabaseQuery(question) {
         try {
-            // Get actual schema from database
-            const schema = await this.getDbSchema();
-            
-            // Build database structure description
-            let dbStructure;
-            
-            if (schema) {
-                // Build from actual schema
-                const nodeDescriptions = Object.entries(schema.nodes)
-                    .map(([nodeType, properties]) => 
-                        `- ${nodeType} nodes with properties: ${properties.join(', ')}`
-                    );
-                
-                const relationshipDescriptions = Array.from(schema.relationships)
-                    .map(relType => {
-                        return `- Relationships of type [:${relType}] between nodes`;
-                    });
-                
-                dbStructure = [...nodeDescriptions, ...relationshipDescriptions].join('\n');
-            } else {
-                // Fallback to our constant-based structure
-                dbStructure = `
-- ${NODE_LABELS.DOCUMENT} nodes with properties: ${NODE_PROPERTIES.ID}, ${NODE_PROPERTIES.FILE_NAME}, ${NODE_PROPERTIES.FILE_TYPE}, ${NODE_PROPERTIES.UPLOAD_DATE}, ${NODE_PROPERTIES.TOTAL_CHUNKS}
-- ${NODE_LABELS.DOCUMENT_CHUNK} nodes with properties: ${NODE_PROPERTIES.ID}, ${NODE_PROPERTIES.DOCUMENT_ID}, ${NODE_PROPERTIES.CONTENT}, ${NODE_PROPERTIES.INDEX}
-- ${NODE_LABELS.ENTITY} nodes with properties: ${NODE_PROPERTIES.TEXT}, ${NODE_PROPERTIES.TYPE}
-- Relationships between ${NODE_LABELS.DOCUMENT}-[:${RELATIONSHIPS.HAS_CHUNK}]->${NODE_LABELS.DOCUMENT_CHUNK}
-- Relationships between ${NODE_LABELS.DOCUMENT_CHUNK}-[:${RELATIONSHIPS.HAS_ENTITY}]->${NODE_LABELS.ENTITY}`;
+            // Ensure schema is initialized
+            if (!this.dbSchema) {
+                await this.initialize();
             }
+            
+            // Build database structure description from the schema
+            const nodeDescriptions = Object.entries(this.dbSchema.nodes)
+                .map(([nodeType, properties]) => 
+                    `- ${nodeType} nodes with properties: ${properties.join(', ')}`
+                );
+            
+            const relationshipDescriptions = Array.from(this.dbSchema.relationships)
+                .map(relType => `- Relationships of type [:${relType}] between nodes`);
+            
+            const dbStructure = [...nodeDescriptions, ...relationshipDescriptions].join('\n');
 
             const prompt = `
 Generate a Neo4j Cypher query to find relevant information for the following question.
@@ -393,17 +435,17 @@ Follow these rules strictly:
 9. Never use undefined variables in WHERE clauses
 10. Always connect all referenced nodes in the query path`;
 
-            this.log('Requesting database query generation', prompt);
+            this.log('Requesting database query generation');
             const response = await this.queryLLM(prompt, 0.2);
 
-            this.log('LLM database query response', response);
+            this.log('LLM database query response received');
             
-            if (!response || !response.response) {
+            if (!response) {
                 throw new Error('Empty response from LLM');
             }
 
             // Clean up the query
-            const query = response.response
+            const query = response
                 .replace(/```[a-zA-Z]*\n/g, '')
                 .replace(/```/g, '')
                 .trim();
@@ -413,9 +455,9 @@ Follow these rules strictly:
         } catch (error) {
             console.error('[LLMService] Error generating database query:', error);
             return `
-                MATCH (c:${NODE_LABELS.DOCUMENT_CHUNK})
-                OPTIONAL MATCH (c)-[:${RELATIONSHIPS.HAS_ENTITY}]->(e:${NODE_LABELS.ENTITY})
-                RETURN c.${NODE_PROPERTIES.CONTENT} as content, 
+                MATCH (c:DocumentChunk)
+                OPTIONAL MATCH (c)-[:HAS_ENTITY]->(e:Entity)
+                RETURN c.content as content, 
                        collect(e) as entities
                 LIMIT 5
             `;

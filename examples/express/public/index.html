@@ -19,7 +19,7 @@
     <main class="container">
         <div class="sidebar">
             <div class="document-list" id="document-list">
-                <h3>Your Documents</h3>
+                <h3>Current Document</h3>
                 <div id="documents"></div>
             </div>
             <div class="drop-zone" id="drop-zone">
@@ -29,11 +29,11 @@
             </div>
             <div class="loading" id="upload-loading">
                 <div class="simple-loader"></div>
-                <p>Processing PDF...</p>
+                <p>Uploading...</p>
             </div>
             <div class="error" id="upload-error"></div>
             <div id="pdf-preview"></div>
-            <button onclick="handleReset()">Start Over</button>
+            <button onclick="handleReset()">Remove Document</button>
         </div>
         
         <div class="main-content">
@@ -203,10 +203,6 @@
             opacity: 1;
             visibility: visible;
         }
-        .document-item.processing {
-            position: relative;
-            background: #f8f9fa;
-        }
         .document-item .status {
             font-size: 0.85rem;
             color: #6c757d;
@@ -318,18 +314,19 @@
                     documentsDiv.innerHTML = '';
 
                     if (data.documents.length === 0) {
-                        // Show the drop zone if no documents
+                        // Show the drop zone if no document
                         document.getElementById('drop-zone').style.display = 'block';
                         document.getElementById('document-list').style.display = 'none';
                     } else {
-                        // Hide drop zone and show document list if we have documents
+                        // Hide drop zone and show document list if we have a document
                         document.getElementById('drop-zone').style.display = 'none';
                         document.getElementById('document-list').style.display = 'block';
                         
-                        data.documents.forEach(doc => {
-                            documents.set(doc.id, doc);
-                            addDocumentToList(doc);
-                        });
+                        // Only take the first document if there are multiple
+                        const doc = data.documents[0];
+                        documents.set(doc.id, doc);
+                        addDocumentToList(doc);
+                        selectDocument(doc.id);
                     }
 
                     // Update UI state
@@ -357,20 +354,16 @@
             const documentsDiv = document.getElementById('documents');
             const docElement = document.createElement('div');
             docElement.className = 'document-item';
-            if (doc.status === 'processing') {
-                docElement.className += ' processing';
-            }
             docElement.dataset.id = documentId;
             docElement.innerHTML = `
                 <div class="document-header">
                     <span class="icon">📄</span>
                     <span class="name">${doc.name || 'Untitled Document'}</span>
                     <span class="date">${new Date(doc.uploadedAt || Date.now()).toLocaleDateString()}</span>
-                    ${doc.status === 'processing' ? '<span class="status">Processing...</span>' : ''}
                 </div>
                 <div class="neo4j-query">
                     <h4>Document Graph Query</h4>
-                    <textarea readonly onclick="this.select()">// Query to check document processing status
+                    <textarea readonly onclick="this.select()">// Query to check document details
 MATCH (d:Document)
 WHERE d.documentId = '${documentId}' OR d.id = '${documentId}'
 OPTIONAL MATCH (d)-[:HAS_CHUNK]->(c:DocumentChunk)
@@ -421,14 +414,14 @@ RETURN d, c, e,
         }
 
         function updateUIState() {
-            const hasDocuments = documents.size > 0;
+            const hasDocument = documents.size > 0;
             const dropZone = document.getElementById('drop-zone');
             const documentList = document.getElementById('document-list');
             const documentsContainer = document.getElementById('documents');
 
-            console.log('Updating UI state, has documents:', hasDocuments);
+            console.log('Updating UI state, has document:', hasDocument);
 
-            if (hasDocuments) {
+            if (hasDocument) {
                 dropZone.style.display = 'none';
                 documentList.style.display = 'block';
                 documentsContainer.style.display = 'block';
@@ -438,8 +431,8 @@ RETURN d, c, e,
                 documentsContainer.style.display = 'none';
             }
 
-            // Enable/disable chat based on documents
-            disableChat(!hasDocuments);
+            // Enable/disable chat based on document
+            disableChat(!hasDocument);
         }
 
         // Modified PDF Upload Handler
@@ -447,6 +440,17 @@ RETURN d, c, e,
             if (!file || file.type !== 'application/pdf') {
                 showError('Please upload a valid PDF file.');
                 return;
+            }
+
+            // If there's already a document, confirm replacement
+            if (documents.size > 0) {
+                if (!confirm('This will replace your current document. Continue?')) {
+                    return;
+                }
+                // Clear existing document
+                await fetch(`${API_ENDPOINT}/cleanup`, { method: 'POST' });
+                documents.clear();
+                document.getElementById('documents').innerHTML = '';
             }
 
             // Show loading state and hide any previous error
@@ -468,13 +472,11 @@ RETURN d, c, e,
                 if (data.success) {
                     console.log('Document uploaded successfully:', data);
                     
-                    // Handle different response structures
+                    // Add document to list
                     const documentData = {
-                        id: data.documentId || data.document?.id || data.id,
-                        name: data.name || data.document?.name || file.name,
-                        uploadedAt: data.uploadedAt || data.document?.uploadedAt || new Date().toISOString(),
-                        neoQuery: data.neoQuery || data.document?.neoQuery || '',
-                        status: 'processing'
+                        id: data.documentId,
+                        name: file.name,
+                        uploadedAt: new Date().toISOString()
                     };
 
                     if (!documentData.id) {
@@ -486,15 +488,17 @@ RETURN d, c, e,
                     addDocumentToList(documentData);
                     selectDocument(documentData.id);
                     updateUIState();
+                    
+                    // Clear chat for the new document
+                    clearChat();
 
-                    // Show success message and ask user to reload
+                    // Hide loading indicator
                     document.getElementById('upload-loading').classList.remove('active');
-                    addMessageToChat('assistant', 'Document uploaded successfully! Please wait a moment for processing to complete, then reload the page to see your document.');
                 } else {
                     throw new Error(data.error || 'Failed to process PDF');
                 }
             } catch (error) {
-                console.error('Error processing PDF:', error);
+                console.error('Error uploading PDF:', error);
                 showError(error.message);
                 document.getElementById('drop-zone').classList.remove('hidden');
             } finally {
@@ -594,7 +598,7 @@ RETURN d, c, e,
             } catch (error) {
                 console.error('Error sending message:', error);
                 thinkingMessage.remove();
-                addMessageToChat('assistant', `Sorry, there was an error processing your request: ${error.message}`);
+                addMessageToChat('assistant', `Sorry, there was an error: ${error.message}`);
             }
         }
 
@@ -624,7 +628,7 @@ RETURN d, c, e,
         }
 
         function handleReset() {
-            if (confirm('Are you sure you want to delete all documents and start over?')) {
+            if (confirm('Are you sure you want to remove the current document?')) {
                 fetch(`${API_ENDPOINT}/cleanup`, {
                     method: 'POST'
                 }).then(() => {

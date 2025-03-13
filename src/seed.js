@@ -33,7 +33,7 @@ export class DatabaseSeeder {
             
             // Create constraints for each node label
             for (const [key, label] of Object.entries(this.NODE_LABELS)) {
-                // For Document and DocumentChunk, create constraint on documentId
+                // For Document, create constraint on documentId
                 if (label === this.NODE_LABELS.DOCUMENT) {
                     await session.run(`
                         CREATE CONSTRAINT document_id IF NOT EXISTS 
@@ -72,6 +72,7 @@ export class DatabaseSeeder {
             `);
 
         } catch (error) {
+            console.error('Failed to create constraints and indexes:', error);
             throw new Error(`Failed to create constraints and indexes: ${error.message}`);
         }
     }
@@ -80,6 +81,7 @@ export class DatabaseSeeder {
         try {
             await this.createConstraints(session);
         } catch (error) {
+            console.error('Failed to seed database:', error);
             throw new Error(`Failed to seed database: ${error.message}`);
         }
     }

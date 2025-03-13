@@ -1,1 +1,1 @@
-export { DocuGraphRAG } from './src/DocuGraphRAG.js';
+export { DocuGraphRAG } from './src/index.js';
