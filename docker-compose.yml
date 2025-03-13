@@ -35,10 +35,12 @@ services:
       - "127.0.0.1:11434:11434"
     volumes:
       - ollama_data:/root/.ollama
+      - ./scripts:/scripts
     environment:
       - OLLAMA_HOST=0.0.0.0
     restart: always
-    command: sh -c "ollama serve & sleep 10 && ollama pull mistral && tail -f /dev/null"
+    entrypoint: [ "/bin/sh" ]
+    command: [ "/scripts/start_mistral.sh" ]
 
 volumes:
   ollama_data:
