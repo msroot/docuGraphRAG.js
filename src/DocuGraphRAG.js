@@ -68,7 +68,18 @@ const NODE_PROPERTIES = {
     CONTENT: 'content',
     INDEX: 'index',
     TEXT: 'text',
-    TYPE: 'type'
+    TYPE: 'type',
+    START_CHAR: 'startChar',
+    END_CHAR: 'endChar',
+    UNIQUE_ID: 'uniqueId',
+    DESCRIPTION: 'description',
+    LEMMA: 'lemma',
+    POS: 'pos',
+    DEP: 'dep',
+    IS_ROOT: 'isRoot',
+    SYNTACTIC_ROLE: 'syntacticRole',
+    MORPHOLOGY: 'morphology',
+    CONFIDENCE_SCORE: 'confidenceScore'
 };
 
 export class DocuGraphRAG {
@@ -274,6 +285,7 @@ export class DocuGraphRAG {
 
             const session = this.driver.session();
             try {
+                // First, create the document node
                 await session.executeWrite(async tx => {
                     await tx.run(`
                         CREATE (d:${this.NODE_LABELS.DOCUMENT} {
@@ -281,70 +293,76 @@ export class DocuGraphRAG {
                             ${this.NODE_PROPERTIES.FILE_NAME}: $fileName,
                             ${this.NODE_PROPERTIES.FILE_TYPE}: $fileType,
                             ${this.NODE_PROPERTIES.UPLOAD_DATE}: datetime($uploadDate),
-                            ${this.NODE_PROPERTIES.TOTAL_CHUNKS}: $totalChunks
+                            ${this.NODE_PROPERTIES.TOTAL_CHUNKS}: $totalChunks,
+                            ${this.NODE_PROPERTIES.CONTENT}: $content
                         })
-                    `, metadata);
+                    `, {
+                        ...metadata,
+                        content: chunks.map(c => c.text).join('\n')
+                    });
                     this.log('3', 'processDocument', 'Document node created', {
                         documentId: metadata.documentId
                     });
+                });
 
-                    for (let i = 0; i < chunks.length; i++) {
-                        const chunk = chunks[i];
-                        this.log('4', 'processDocument', `Processing chunk ${i + 1}/${chunks.length}`, {
-                            chunkIndex: i,
-                            documentId: metadata.documentId
-                        });
+                // Then, process each chunk in its own transaction
+                for (let i = 0; i < chunks.length; i++) {
+                    const chunk = chunks[i];
+                    this.log('4', 'processDocument', `Processing chunk ${i + 1}/${chunks.length}`, {
+                        chunkIndex: i,
+                        documentId: metadata.documentId
+                    });
 
+                    // Create chunk node in its own transaction
+                    await session.executeWrite(async tx => {
                         await tx.run(`
                             MATCH (d:${this.NODE_LABELS.DOCUMENT} {${this.NODE_PROPERTIES.DOCUMENT_ID}: $documentId})
                             CREATE (c:${this.NODE_LABELS.DOCUMENT_CHUNK} {                                
                                 ${this.NODE_PROPERTIES.DOCUMENT_ID}: $documentId,
                                 ${this.NODE_PROPERTIES.CONTENT}: $content,
-                                ${this.NODE_PROPERTIES.INDEX}: $index
+                                ${this.NODE_PROPERTIES.INDEX}: $index,
+                                ${this.NODE_PROPERTIES.START_CHAR}: $startChar,
+                                ${this.NODE_PROPERTIES.END_CHAR}: $endChar
                             })
                             CREATE (d)-[:${this.RELATIONSHIPS.HAS_CHUNK}]->(c)
                             RETURN c
                         `, {
                             documentId: metadata.documentId,                            
                             content: chunk.text,
-                            index: chunk.chunkIndex
+                            index: chunk.chunkIndex,
+                            startChar: chunk.startChar || 0,
+                            endChar: chunk.endChar || chunk.text.length
                         });
 
                         this.log('5', 'processDocument', 'Chunk node created', {
                             chunkIndex: i,
                             documentId: metadata.documentId
                         });
-                            
-                        try {
-                            this.log('6', 'processDocument', 'Starting entity extraction', {
-                                chunkIndex: i,
-                                documentId: metadata.documentId
-                            });
+                    });
 
-                            const llmResponse = await this.extractEntities(chunk.text, chunk.chunkIndex);
-                            
-                            this.log('7', 'processDocument', 'Entity extraction completed', {
-                                ...llmResponse,
-                                chunkIndex: i,
-                                documentId: metadata.documentId
-                            });
-                            
-                            await this.processLLMResponse(llmResponse);
-                            
-                            this.log('8', 'processDocument', 'LLM response processed', {
-                                chunkIndex: i,
-                                documentId: metadata.documentId
-                            });
-                        } catch (error) {
-                            this.log('ERROR', 'processDocument', 'Error in chunk processing', {
-                                error: error.message,
-                                chunkIndex: i,
-                                documentId: metadata.documentId
-                            });
-                            throw error;
-                        }
+                    // Extract entities after chunk is created
+                    try {
+                        this.log('6', 'processDocument', 'Starting entity extraction', {
+                            chunkIndex: i,
+                            documentId: metadata.documentId
+                        });
+
+                        const entityResult = await this.extractEntities(chunk.text, chunk.chunkIndex, metadata.documentId);
+                        
+                        this.log('7', 'processDocument', 'Entity extraction completed', {
+                            ...entityResult,
+                            chunkIndex: i,
+                            documentId: metadata.documentId
+                        });
+                    } catch (error) {
+                        this.log('ERROR', 'processDocument', 'Error in chunk processing', {
+                            error: error.message,
+                            chunkIndex: i,
+                            documentId: metadata.documentId
+                        });
+                        throw error;
                     }
-                });
+                }
             } finally {
                 await session.close();
             }
@@ -432,15 +450,19 @@ export class DocuGraphRAG {
         }
     }
 
-    async extractEntities(text, chunkId) {
+    async extractEntities(text, chunkId, documentId) {
         try {
-            // Validate chunkId
+            // Validate input parameters
             if (typeof chunkId !== 'number' || chunkId < 0) {
                 throw new Error(`Invalid chunkId: ${chunkId}`);
+            }
+            if (!documentId) {
+                throw new Error('documentId is required for entity extraction');
             }
 
             this.log('1', 'extractEntities', 'Starting entity extraction', {
                 chunkId,
+                documentId,
                 textLength: text?.length || 0
             });
             
@@ -506,20 +528,21 @@ export class DocuGraphRAG {
                 chunkId
             });
             const createStatements = entities.map((entity, index) => 
-                `MERGE (e${index}:${this.NODE_LABELS.ENTITY} {
+                `CREATE (e${index}:${this.NODE_LABELS.ENTITY}:${entity.type} {
                     ${this.NODE_PROPERTIES.TEXT}: '${entity.text.replace(/'/g, "\\'")}',
-                    ${this.NODE_PROPERTIES.TYPE}: '${entity.type}'
-                })
-                ON CREATE SET
-                    e${index}.start = ${entity.start},
-                    e${index}.end = ${entity.end},
-                    e${index}.description = '${(entity.description || '').replace(/'/g, "\\'")}',
-                    e${index}.lemma = '${(entity.lemma || '').replace(/'/g, "\\'")}',
-                    e${index}.pos = '${entity.pos}',
-                    e${index}.dep = '${entity.dep}',
-                    e${index}.isRoot = ${entity.isRoot},
-                    e${index}.syntacticRole = '${entity.syntacticRole}',
-                    e${index}.morphology = '${JSON.stringify(entity.morphology).replace(/'/g, "\\'")}'`
+                    ${this.NODE_PROPERTIES.TYPE}: '${entity.type}',
+                    ${this.NODE_PROPERTIES.DOCUMENT_ID}: $documentId,
+                    ${this.NODE_PROPERTIES.START_CHAR}: ${entity.start},
+                    ${this.NODE_PROPERTIES.END_CHAR}: ${entity.end},
+                    ${this.NODE_PROPERTIES.DESCRIPTION}: '${(entity.description || '').replace(/'/g, "\\'")}',
+                    ${this.NODE_PROPERTIES.LEMMA}: '${(entity.lemma || '').replace(/'/g, "\\'")}',
+                    ${this.NODE_PROPERTIES.POS}: '${entity.pos}',
+                    ${this.NODE_PROPERTIES.DEP}: '${entity.dep}',
+                    ${this.NODE_PROPERTIES.IS_ROOT}: ${entity.isRoot},
+                    ${this.NODE_PROPERTIES.SYNTACTIC_ROLE}: '${entity.syntacticRole}',
+                    ${this.NODE_PROPERTIES.MORPHOLOGY}: '${JSON.stringify(entity.morphology).replace(/'/g, "\\'")}',
+                    ${this.NODE_PROPERTIES.CONFIDENCE_SCORE}: ${entity.confidence || 1.0}
+                })`
             );
             this.log('9', 'extractEntities', 'Entity creation statements generated');
 
@@ -536,7 +559,12 @@ export class DocuGraphRAG {
                     
                     if (sourceIdx !== -1 && targetIdx !== -1) {
                         relationshipStatements.push(
-                            `MERGE (e${sourceIdx})-[:${rel.type.toUpperCase()}]->(e${targetIdx})`
+                            `CREATE (e${sourceIdx})-[:${rel.type.toUpperCase()} {
+                                ${this.NODE_PROPERTIES.DOCUMENT_ID}: $documentId,
+                                ${this.NODE_PROPERTIES.CONFIDENCE_SCORE}: ${rel.confidence || 1.0},
+                                ${this.NODE_PROPERTIES.START_CHAR}: ${rel.start || Math.min(entities[sourceIdx].start, entities[targetIdx].start)},
+                                ${this.NODE_PROPERTIES.END_CHAR}: ${rel.end || Math.max(entities[sourceIdx].end, entities[targetIdx].end)}
+                            }]->(e${targetIdx})`
                         );
                     }
                 });
@@ -552,7 +580,12 @@ export class DocuGraphRAG {
                     const headIdx = entities.findIndex(e => e.start === entity.head?.start && e.end === entity.head?.end);
                     if (headIdx !== -1) {
                         relationshipStatements.push(
-                            `MERGE (e${i})-[:${entity.dep.toUpperCase()}]->(e${headIdx})`
+                            `CREATE (e${i})-[:${entity.dep.toUpperCase()} {
+                                ${this.NODE_PROPERTIES.DOCUMENT_ID}: $documentId,
+                                ${this.NODE_PROPERTIES.CONFIDENCE_SCORE}: 1.0,
+                                ${this.NODE_PROPERTIES.START_CHAR}: ${Math.min(entity.start, entities[headIdx].start)},
+                                ${this.NODE_PROPERTIES.END_CHAR}: ${Math.max(entity.end, entities[headIdx].end)}
+                            }]->(e${headIdx})`
                         );
                     }
                 }
@@ -562,17 +595,32 @@ export class DocuGraphRAG {
                     if (i !== j) {
                         if (entities[i].end === entities[j].start - 1) {
                             relationshipStatements.push(
-                                `MERGE (e${i})-[:PRECEDES]->(e${j})`
+                                `CREATE (e${i})-[:PRECEDES {
+                                    ${this.NODE_PROPERTIES.DOCUMENT_ID}: $documentId,
+                                    ${this.NODE_PROPERTIES.CONFIDENCE_SCORE}: 1.0,
+                                    ${this.NODE_PROPERTIES.START_CHAR}: ${entities[i].start},
+                                    ${this.NODE_PROPERTIES.END_CHAR}: ${entities[j].end}
+                                }]->(e${j})`
                             );
                         }
                         if (entities[i].end >= entities[j].start && entities[i].start <= entities[j].end) {
                             relationshipStatements.push(
-                                `MERGE (e${i})-[:OVERLAPS]->(e${j})`
+                                `CREATE (e${i})-[:OVERLAPS {
+                                    ${this.NODE_PROPERTIES.DOCUMENT_ID}: $documentId,
+                                    ${this.NODE_PROPERTIES.CONFIDENCE_SCORE}: 1.0,
+                                    ${this.NODE_PROPERTIES.START_CHAR}: ${Math.min(entities[i].start, entities[j].start)},
+                                    ${this.NODE_PROPERTIES.END_CHAR}: ${Math.max(entities[i].end, entities[j].end)}
+                                }]->(e${j})`
                             );
                         }
                         if (entities[i].start <= entities[j].start && entities[i].end >= entities[j].end) {
                             relationshipStatements.push(
-                                `MERGE (e${i})-[:CONTAINS]->(e${j})`
+                                `CREATE (e${i})-[:CONTAINS {
+                                    ${this.NODE_PROPERTIES.DOCUMENT_ID}: $documentId,
+                                    ${this.NODE_PROPERTIES.CONFIDENCE_SCORE}: 1.0,
+                                    ${this.NODE_PROPERTIES.START_CHAR}: ${entities[i].start},
+                                    ${this.NODE_PROPERTIES.END_CHAR}: ${entities[i].end}
+                                }]->(e${j})`
                             );
                         }
                     }
@@ -585,12 +633,23 @@ export class DocuGraphRAG {
             // Match the chunk and create relationships to entities
             this.log('12', 'extractEntities', 'Building final Cypher query');
             const cypherQuery = `
-                MATCH (c:${this.NODE_LABELS.DOCUMENT_CHUNK} {${this.NODE_PROPERTIES.INDEX}: $chunkId})
+                MATCH (c:${this.NODE_LABELS.DOCUMENT_CHUNK} {
+                    ${this.NODE_PROPERTIES.INDEX}: $chunkId,
+                    ${this.NODE_PROPERTIES.DOCUMENT_ID}: $documentId
+                })
+                // Create entities with document scope
                 ${createStatements.join('\n')}
+                
+                // Link entities to their chunk with document scope
                 ${entities.map((_, index) => 
-                    `MERGE (c)-[:${this.RELATIONSHIPS.HAS_ENTITY}]->(e${index})`
+                    `CREATE (c)-[:${this.RELATIONSHIPS.HAS_ENTITY} {
+                        ${this.NODE_PROPERTIES.DOCUMENT_ID}: $documentId
+                    }]->(e${index})`
                 ).join('\n')}
+                
+                // Create relationships between entities within document scope
                 ${relationshipStatements.join('\n')}
+                
                 RETURN count(DISTINCT e0) as entityCount, count(*) as relationshipCount
             `;
             
@@ -605,9 +664,12 @@ export class DocuGraphRAG {
             const session = this.driver.session();
             try {
                 const verifyChunk = await session.run(
-                    `MATCH (c:${this.NODE_LABELS.DOCUMENT_CHUNK} {${this.NODE_PROPERTIES.INDEX}: $chunkId}) 
+                    `MATCH (c:${this.NODE_LABELS.DOCUMENT_CHUNK} {
+                        ${this.NODE_PROPERTIES.INDEX}: $chunkId,
+                        ${this.NODE_PROPERTIES.DOCUMENT_ID}: $documentId
+                    }) 
                      RETURN c`,
-                    { chunkId }
+                    { chunkId, documentId }
                 );
                 
                 if (!verifyChunk.records.length) {
@@ -619,7 +681,7 @@ export class DocuGraphRAG {
                     chunkFound: true
                 });
 
-                const result = await session.run(cypherQuery, { chunkId });
+                const result = await session.run(cypherQuery, { chunkId, documentId });
                 const stats = result.records[0];
                 this.log('15', 'extractEntities', 'Query executed successfully', {
                     chunkId,
@@ -646,6 +708,37 @@ export class DocuGraphRAG {
                 console.error('Failed query:', error.query || 'No query available');
             }
             throw new Error(`Failed to extract and save entities for chunk ${chunkId}: ${error.message}`);
+        }
+    }
+
+    async verifyEntityProperties(documentId) {
+        const session = this.driver.session();
+        try {
+            const result = await session.run(`
+                MATCH (d:${this.NODE_LABELS.DOCUMENT} {${this.NODE_PROPERTIES.DOCUMENT_ID}: $documentId})
+                MATCH (c:${this.NODE_LABELS.DOCUMENT_CHUNK})-[:${this.RELATIONSHIPS.HAS_CHUNK}]-(d)
+                MATCH (e)-[:${this.RELATIONSHIPS.HAS_ENTITY}]-(c)
+                RETURN 
+                    e.${this.NODE_PROPERTIES.TEXT} as text,
+                    e.${this.NODE_PROPERTIES.TYPE} as type,
+                    e.${this.NODE_PROPERTIES.START_CHAR} as startChar,
+                    e.${this.NODE_PROPERTIES.END_CHAR} as endChar,
+                    e.${this.NODE_PROPERTIES.UNIQUE_ID} as uniqueId,
+                    labels(e) as labels,
+                    c.${this.NODE_PROPERTIES.INDEX} as chunkIndex
+            `, { documentId });
+            
+            return result.records.map(record => ({
+                text: record.get('text'),
+                type: record.get('type'),
+                startChar: record.get('startChar').toNumber(),
+                endChar: record.get('endChar').toNumber(),
+                uniqueId: record.get('uniqueId'),
+                labels: record.get('labels'),
+                chunkIndex: record.get('chunkIndex').toNumber()
+            }));
+        } finally {
+            await session.close();
         }
     }
 }

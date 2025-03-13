@@ -3,26 +3,13 @@
 http://localhost:7474/browser/
 
 
-MATCH (d:Document) 
-RETURN d.documentId
+MATCH (d:Document)
+OPTIONAL MATCH path = (d)-[:HAS_CHUNK]->(c:DocumentChunk)-[:HAS_ENTITY]->(e:Entity)
+OPTIONAL MATCH (e)-[r]->(e2:Entity)
+WHERE e.documentId = e2.documentId 
+  AND e.documentId = d.documentId
 
-
-// Check document and chunks
-MATCH (d:Document {id: $YOUR_DOC_ID})-[r:HAS_CHUNK]->(c:DocumentChunk)
-RETURN d.fileName, c.content, c.index;
-
-// Check entities
-MATCH (d:Document {id: $YOUR_DOC_ID})-[:HAS_CHUNK]->(c:DocumentChunk)-[:HAS_ENTITY]->(e:Entity)
-RETURN e.text, e.type;
-
-// Check keywords
-MATCH (d:Document {id: $YOUR_DOC_ID})-[:HAS_CHUNK]->(c:DocumentChunk)-[:HAS_KEYWORD]->(k:Keyword)
-RETURN k.text;
-
-// Check concepts
-MATCH (d:Document {id: $YOUR_DOC_ID})-[:HAS_CHUNK]->(c:DocumentChunk)-[:EXPRESSES_CONCEPT]->(co:Concept)
-RETURN co.text;
-
+RETURN d, c, e, e2, r;
 
   MATCH (n)
  DETACH DELETE n
