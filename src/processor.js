@@ -41,47 +41,34 @@ export class Processor {
     async processDocument(buffer, fileName) {
         try {
             this.log(`Starting document processing for file: ${fileName}`);
-
-            // Verify file type
             if (!fileName.toLowerCase().endsWith('.pdf')) {
                 throw new Error('Only PDF files are supported');
             }
 
-            // 1. Extract text from PDF
-            this.log('Step 1: Extracting text from PDF');
             const text = await this.extractTextFromPDF(buffer);
-            this.log(`Text extraction complete. Total text length: ${text.length}`);
-
-            // 2. Split text into chunks
-            this.log('Step 2: Splitting text into chunks');
             const chunks = await this.textSplitter.splitText(text);
-            this.log(`Text splitting complete. Created ${chunks.length} chunks`);
+            const documentId = uuidv4()
+            
 
-            // 3. Process each chunk
-            this.log('Step 3: Creating chunk objects');
             const processedChunks = chunks.map((chunk, index) => ({
-                id: uuidv4(),
                 text: chunk,
-                chunkIndex: index
+                chunkIndex: index,
+                documentId
             }));
 
-            // 4. Create document metadata
-            this.log('Step 4: Creating document metadata');
-            const documentMetadata = {
-                id: uuidv4(),
+            
+            const metadata = {
+                documentId ,
                 fileName,
                 fileType: 'pdf',
                 uploadDate: new Date().toISOString(),
                 totalChunks: processedChunks.length
             };
 
-            this.log('Document processing complete', {
-                documentId: documentMetadata.id,
-                totalChunks: documentMetadata.totalChunks
-            });
+           
 
             return {
-                metadata: documentMetadata,
+                metadata,
                 chunks: processedChunks
             };
         } catch (error) {

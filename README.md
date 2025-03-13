@@ -3,6 +3,10 @@
 http://localhost:7474/browser/
 
 
+MATCH (d:Document) 
+RETURN d.documentId
+
+
 // Check document and chunks
 MATCH (d:Document {id: $YOUR_DOC_ID})-[r:HAS_CHUNK]->(c:DocumentChunk)
 RETURN d.fileName, c.content, c.index;
@@ -24,7 +28,39 @@ RETURN co.text;
  DETACH DELETE n
 
 
-MATCH (d:Document {id: 'abd4d46a-ee98-4941-910d-8c729728c61a'}) 
+
+MATCH (d:Document)
+OPTIONAL MATCH (d)-[r1:HAS_CHUNK]->(c:DocumentChunk)
+OPTIONAL MATCH (c)-[r2:HAS_ENTITY]->(e:Entity)
+RETURN 
+    d.fileName as Document,
+    count(DISTINCT c) as Chunks,
+    count(DISTINCT e) as Entities,
+    collect(DISTINCT e.text) as EntityTexts,
+    collect(DISTINCT e.type) as EntityTypes;
+    
+
+MATCH (d:Document)
+OPTIONAL MATCH (d)-[r1:HAS_CHUNK]->(c:Chunk)
+OPTIONAL MATCH (c)-[r2:HAS_ENTITY]->(e:Entity)
+OPTIONAL MATCH (c)-[r3:CONTAINS_LOCATION]->(l:Location)
+OPTIONAL MATCH (c)-[r4:MENTIONS_PERSON]->(p:Person)
+OPTIONAL MATCH (c)-[r5:MENTIONS_ORGANIZATION]->(o:Organization)
+OPTIONAL MATCH (c)-[r6:MENTIONS_DATE]->(dt:Date)
+RETURN 
+    d as document,
+    collect(DISTINCT c) as chunks,
+    collect(DISTINCT e) as entities,
+    collect(DISTINCT l) as locations,
+    collect(DISTINCT p) as persons,
+    collect(DISTINCT o) as organizations,
+    collect(DISTINCT dt) as dates
+
+
+
+    
+
+MATCH (d:Document {id: 'a4a1809d-e985-4150-9c62-7b4a38de718a'}) 
 OPTIONAL MATCH (d)-[:HAS_CHUNK]->(c:DocumentChunk)
 OPTIONAL MATCH (c)-[:HAS_ENTITY]->(e:Entity)
 OPTIONAL MATCH (c)-[:HAS_KEYWORD]->(k:Keyword)

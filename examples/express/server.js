@@ -1,15 +1,18 @@
 import express from 'express';
 import multer from 'multer';
-import { DocuGraphRAG } from '../../index.js';
-import cors from 'cors';
+import { DocuGraphRAG } from '../../src/DocuGraphRAG.js';
+import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import neo4j from 'neo4j-driver';
 
-// Get current directory
+// Get the directory name of the current module
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Load environment variables from the root directory
+dotenv.config({ path: path.resolve(__dirname, '../../.env') });
+ 
 // Constants
 const HARDCODED_USER_ID = '1'; // TODO: Replace with proper user authentication
 
@@ -17,37 +20,44 @@ const HARDCODED_USER_ID = '1'; // TODO: Replace with proper user authentication
 const app = express();
 
 // Middleware setup with security headers
-app.use(cors());
 app.use(express.json());  // Add this BEFORE routes
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Neo4j configuration
-const neo4jUrl = process.env.VECTOR_STORE_URL || 'bolt://localhost:7687';
-const neo4jUser = process.env.VECTOR_STORE_USER || 'neo4j';
-const neo4jPassword = process.env.VECTOR_STORE_PASSWORD || 'password123';
-
 // Initialize Neo4j driver
 const driver = neo4j.driver(
-    neo4jUrl,
-    neo4j.auth.basic(neo4jUser, neo4jPassword)
+    process.env.NEO4J_URL,
+    neo4j.auth.basic(process.env.NEO4J_USER, process.env.NEO4J_PASSWORD)
 );
 
-// Initialize DocuRAG instance
-const docuRAG = new DocuGraphRAG({
-    vectorStore: 'neo4j',
-    vectorStoreConfig: {
-        url: neo4jUrl,
-        user: neo4jUser,
-        password: neo4jPassword
+// Configure multer for file uploads
+const upload = multer({
+    storage: multer.memoryStorage(),
+    fileFilter: (req, file, cb) => {
+        // Accept PDF files only
+        if (file.mimetype === 'application/pdf') {
+            cb(null, true);
+        } else {
+            cb(new Error('Only PDF files are allowed'));
+        }
     },
-    llmUrl: process.env.LLM_URL || 'http://localhost:11434'
+    limits: {
+        fileSize: 10 * 1024 * 1024 // 10MB limit
+    }
+});
+
+// Initialize DocuGraphRAG with environment variables
+const docurag = new DocuGraphRAG({
+    neo4jUrl: process.env.NEO4J_URL,
+    neo4jUser: process.env.NEO4J_USER,
+    neo4jPassword: process.env.NEO4J_PASSWORD,
+    debug: process.env.DEBUG === 'true'
 });
 
 // Get all documents for a user
 app.get('/documents', async (req, res) => {
     const session = driver.session();
     try {
-        // Query Neo4j for documents
+        // Query Neo4j for documents with all properties
         const result = await session.run(
             `MATCH (d:Document) 
              WHERE d.userId = $userId 
@@ -57,11 +67,37 @@ app.get('/documents', async (req, res) => {
         
         const documents = result.records.map(record => {
             const doc = record.get('d').properties;
+            const neoQuery = `// 1. Check all Documents
+MATCH (d:Document)
+RETURN d;
+
+// 2. Check Document-Chunk connections
+MATCH (d:Document)-[r:HAS_CHUNK]->(c:DocumentChunk)
+RETURN d, r, c;
+
+// 3. Check Chunks to Entities
+MATCH (c:DocumentChunk)-[r]->(e:Entity)
+RETURN c, r, e;
+
+// 4. Check Chunks to Keywords
+MATCH (c:DocumentChunk)-[r]->(k:Keyword)
+RETURN c, r, k;
+
+// 5. Check Chunks to Concepts
+MATCH (c:DocumentChunk)-[r]->(co:Concept)
+RETURN c, r, co;
+
+// 6. Check for any ERROR nodes
+MATCH (e:ERROR)
+RETURN e;
+
+// 7. Check all relationships from chunks (to see what we might have missed)
+MATCH (c:DocumentChunk)-[r]-(x)
+RETURN c, type(r), x;`;
+            
             return {
-                id: doc.id || doc.documentId,
-                name: doc.name || doc.fileName,
-                uploadedAt: doc.uploadedAt || doc.timestamp || new Date().toISOString(),
-                status: doc.status || 'processed'
+                ...doc,
+                neoQuery
             };
         });
 
@@ -80,135 +116,48 @@ app.get('/documents', async (req, res) => {
     }
 });
 
-// Configure multer for secure PDF upload
-const upload = multer({
-    storage: multer.memoryStorage(),
-    limits: {
-        fileSize: 10 * 1024 * 1024,
-        files: 1
-    },
-    fileFilter: (req, file, cb) => {
-        if (file.mimetype === 'application/pdf') {
-            cb(null, true);
-        } else {
-            cb(new Error('Only PDF files are allowed'));
-        }
-    }
-});
-
-// Upload endpoint
+// Routes
 app.post('/upload', upload.single('pdf'), async (req, res) => {
-    const session = driver.session();
     try {
         if (!req.file) {
             return res.status(400).json({ 
                 success: false,
-                error: 'No PDF file uploaded'
+                error: 'No PDF file uploaded' 
             });
         }
 
-        const { buffer, originalname } = req.file;
+        console.log('Processing file:', {
+            originalname: req.file.originalname,
+            mimetype: req.file.mimetype,
+            size: req.file.size
+        });
 
-        // Process document
-        const result = await docuRAG.processDocument(buffer, originalname);
-        
-        if (!result || !result.documentId) {
-            throw new Error('PDF processing failed');
-        }
-
-        // Store document metadata in Neo4j
-        const documentInfo = {
-            id: result.documentId,
-            name: originalname,
-            userId: HARDCODED_USER_ID,
-            uploadedAt: new Date().toISOString(),
-            status: 'processed'
-        };
-
-        // Store in Neo4j
-        await session.run(
-            `MERGE (d:Document {id: $id})
-             SET d += $properties
-             RETURN d`,
-            {
-                id: documentInfo.id,
-                properties: documentInfo
-            }
-        );
-
-        res.json({ 
+        const result = await docurag.processDocument(req.file.buffer, req.file.originalname);
+        res.json({
             success: true,
-            message: 'PDF processed successfully',
-            document: documentInfo
+            documentId: result.documentId
         });
     } catch (error) {
-        console.error('PDF processing error:', error);
+        console.error('Error processing document:', error);
         res.status(500).json({ 
             success: false,
-            error: 'Failed to process PDF file'
+            error: error.message || 'Failed to process document'
         });
-    } finally {
-        await session.close();
     }
 });
 
-// Chat endpoint with Server-Sent Events (SSE)
 app.post('/chat', async (req, res) => {
-    const session = driver.session();
     try {
-        if (!req.body || typeof req.body !== 'object') {
-            return res.status(400).json({
-                success: false,
-                error: 'Invalid request body'
-            });
+        const { question } = req.body;
+        if (!question) {
+            return res.status(400).json({ error: 'Question is required' });
         }
 
-        const { message } = req.body;
-
-        if (!message || typeof message !== 'string') {
-            return res.status(400).json({
-                success: false,
-                error: 'Message is required and must be a string'
-            });
-        }
-
-        // Configure SSE headers
-        res.setHeader('Content-Type', 'text/event-stream');
-        res.setHeader('Cache-Control', 'no-cache');
-        res.setHeader('Connection', 'keep-alive');
-
-        // Chat with streaming response
-        await docuRAG.chat(message, {
-            onData: (data) => {
-                if (data.error) {
-                    res.write(`data: ${JSON.stringify({ error: data.error })}\n\n`);
-                    res.end();
-                    return;
-                }
-                
-                if (data.answer) {
-                    res.write(`data: ${JSON.stringify({ content: data.answer })}\n\n`);
-                }
-                
-                if (data.done) {
-                    res.write('data: [DONE]\n\n');
-                    res.end();
-                }
-            }
-        });
+        const result = await docurag.chat(question);
+        res.json(result);
     } catch (error) {
-        console.error('Chat endpoint error:', error);
-        if (!res.headersSent) {
-            res.status(500).json({ 
-                success: false, 
-                error: 'Failed to process chat message' 
-            });
-        } else {
-            res.write(`data: ${JSON.stringify({ error: 'Failed to process chat message' })}\n\n`);
-            res.end();
-        }
-    } finally {
-        await session.close();
+        console.error('Error processing chat:', error);
+        res.status(500).json({ error: error.message });
     }
 });
 
@@ -220,7 +169,7 @@ app.post('/cleanup', async (req, res) => {
         await session.run('MATCH (d:Document) DETACH DELETE d');
         
         // Clean up DocuRAG resources
-        await docuRAG.cleanup();
+        await docurag.cleanup();
         
         res.json({ 
             success: true, 
@@ -238,16 +187,17 @@ app.post('/cleanup', async (req, res) => {
 });
 
 // Start server with proper error handling
-const PORT = process.env.PORT || 3000;
+const port = process.env.PORT || 3000;
 
 // Initialize DocuRAG and start server
 async function startServer() {
     try {
-        await docuRAG.initialize();
+        console.log('Initializing DocuRAG...');
+        await docurag.initialize();
         console.log('DocuRAG initialized successfully');
         
-        const server = app.listen(PORT, () => {
-            console.log(`Server running at http://localhost:${PORT}`);
+        const server = app.listen(port, () => {
+            console.log(`Server running at http://localhost:${port}`);
         });
 
         // Handle server shutdown gracefully
@@ -255,7 +205,7 @@ async function startServer() {
             console.log('Received SIGTERM. Performing graceful shutdown...');
             await driver.close();
             server.close(async () => {
-                await docuRAG.cleanup();
+                await docurag.cleanup();
                 process.exit(0);
             });
         });
