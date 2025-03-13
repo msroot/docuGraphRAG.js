@@ -14,7 +14,6 @@ const __dirname = path.dirname(__filename);
 dotenv.config({ path: path.resolve(__dirname, '../../.env') });
  
 // Constants
-const HARDCODED_USER_ID = '1'; // TODO: Replace with proper user authentication
 
 // Initialize express app with security defaults
 const app = express();
@@ -62,7 +61,6 @@ app.get('/documents', async (req, res) => {
             `MATCH (d:Document) 
              WHERE d.userId = $userId 
              RETURN d`,
-            { userId: HARDCODED_USER_ID }
         );
         
         const documents = result.records.map(record => {

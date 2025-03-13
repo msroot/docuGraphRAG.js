@@ -15,6 +15,9 @@ const LLM_CONFIG = {
     DEBUG: false
 };
 
+// Ollama API URL constant
+const OLLAMA_API_URL = 'http://localhost:11434/api/generate';
+
 // Constants for Neo4j relationships and entity types
 const RELATIONSHIPS = {
     HAS_CHUNK: 'HAS_CHUNK',
@@ -199,7 +202,7 @@ export class LLMService {
 
     async queryLLM(prompt, temperature = 0.1) {
         const result = await this.retryRequest(async () => {
-            const response = await axios.post('http://localhost:11434/api/generate', {
+            const response = await axios.post(OLLAMA_API_URL, {
                 model: this.config.model,
                 prompt: prompt,
                 temperature: temperature,
@@ -216,7 +219,7 @@ export class LLMService {
         this.log('Starting streaming LLM response');
         
         try {
-            const response = await axios.post('http://localhost:11434/api/generate', {
+            const response = await axios.post(OLLAMA_API_URL, {
                 model: this.config.model,
                 prompt: prompt,
                 temperature: temperature,
@@ -433,7 +436,8 @@ Follow these rules strictly:
 7. Always check parentheses are balanced
 8. Always use aliases for all returned fields
 9. Never use undefined variables in WHERE clauses
-10. Always connect all referenced nodes in the query path`;
+10. Always connect all referenced nodes in the query path
+11. DO NOT use any parameters like $userId in the query`;
 
             this.log('Requesting database query generation');
             const response = await this.queryLLM(prompt, 0.2);
@@ -445,10 +449,19 @@ Follow these rules strictly:
             }
 
             // Clean up the query
-            const query = response
+            let query = response
                 .replace(/```[a-zA-Z]*\n/g, '')
                 .replace(/```/g, '')
                 .trim();
+                
+            // Check if the query contains $userId parameter and modify it
+            if (query.includes('$userId')) {
+                this.log('Query contains $userId parameter, removing it');
+                // Remove WHERE clauses with userId
+                query = query.replace(/WHERE\s+\w+\.userId\s*=\s*\$userId/gi, '');
+                // If that doesn't work, replace the parameter with a literal
+                query = query.replace(/\$userId/g, "'1'");
+            }
 
             this.log('Generated database query:', query);
             return query;
