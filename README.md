@@ -2,6 +2,8 @@
 
 A document processing and RAG (Retrieval-Augmented Generation) library that converts documents into knowledge graphs. Uses graph databases for context retrieval and enables document interaction through local LLMs.
 
+> ⚠️ **Note**: This project is intended for research and experimental purposes only. It serves as a demonstration of RAG (Retrieval-Augmented Generation) concepts and graph-based document processing techniques.
+
 ## 📖 Project Evolution
 
 docuGraphRAG.js builds upon [docuRAG.js](https://github.com/msroot/docuRAG.js/) with a focus on graph-based document representation:
@@ -31,6 +33,7 @@ Key improvements:
 - Docker & Docker Compose
 - Node.js 18+
 - 8GB free disk space (Mistral model: 4GB)
+- Minimum 10GB RAM available for Ollama service (using Mistral model)
 
 ## 🚀 Quick Start
 
@@ -153,6 +156,21 @@ graph TD
 3. **Ollama**
    - Check model: `docker logs ollama`
    - Test API: `curl http://localhost:11434/api/generate`
+   - Memory Issues:
+     - Error "model requires more system memory than is available": The Mistral model requires 10.8GB of system memory
+     - Common symptoms:
+       - Available memory: System shows only ~1.1GB available when 4.8GB is needed
+       - Logs show: "model request too large for system"
+       - No GPU detected: "no compatible GPUs were discovered"
+     - Solutions:
+       1. Increase system resources:
+          - Ensure your system has at least 6GB total RAM (4.8GB for model + overhead)
+          - In Docker Desktop: Increase memory allocation to at least 5GB
+          - Check swap space availability (recommended: at least 1GB)
+     - Best Practices:
+       - Monitor system resources: `docker stats`
+       - Check logs for memory warnings: `docker logs ollama`
+       - Consider GPU support for better performance
 
 ## 📚 Examples
 
