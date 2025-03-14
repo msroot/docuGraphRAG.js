@@ -20,7 +20,7 @@ export class DatabaseSeeder {
                         await session.run(`DROP CONSTRAINT ${constraintName} IF EXISTS`);
                     }
                 }
-                
+
                 // Drop indexes manually
                 const indexes = await session.run('SHOW INDEXES');
                 for (const record of indexes.records) {
@@ -30,7 +30,7 @@ export class DatabaseSeeder {
                     }
                 }
             }
-            
+
             // Create constraints for each node label
             for (const [key, label] of Object.entries(this.NODE_LABELS)) {
                 // For Document, create constraint on documentId
@@ -41,7 +41,7 @@ export class DatabaseSeeder {
                         REQUIRE n.${this.NODE_PROPERTIES.DOCUMENT_ID} IS UNIQUE
                     `);
                 }
-                
+
                 // For Entity nodes, create composite index on text and type
                 if (label === this.NODE_LABELS.ENTITY) {
                     await session.run(`

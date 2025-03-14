@@ -7,40 +7,6 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
- 
-
-// Constants for Neo4j relationships and entity types
-const RELATIONSHIPS = {
-    HAS_CHUNK: 'HAS_CHUNK',
-    HAS_ENTITY: 'HAS_ENTITY',
-    HAS_KEYWORD: 'HAS_KEYWORD',
-    EXPRESSES_CONCEPT: 'EXPRESSES_CONCEPT',
-    CONTAINS_ENTITY: 'CONTAINS_ENTITY',
-    CONTAINS_KEYWORD: 'CONTAINS_KEYWORD',
-    CONTAINS_CONCEPT: 'CONTAINS_CONCEPT',
-    MENTIONS: 'MENTIONS',
-    RELATED_TO: 'RELATED_TO'
-};
-
-const NODE_LABELS = {
-    DOCUMENT: 'Document',
-    DOCUMENT_CHUNK: 'DocumentChunk',
-    ENTITY: 'Entity'
-};
-
-const NODE_PROPERTIES = {
-    ID: 'id',
-    DOCUMENT_ID: 'documentId',
-    FILE_NAME: 'fileName',
-    FILE_TYPE: 'fileType',
-    UPLOAD_DATE: 'uploadDate',
-    TOTAL_CHUNKS: 'totalChunks',
-    CONTENT: 'content',
-    INDEX: 'index',
-    TEXT: 'text',
-    TYPE: 'type'
-};
-
 // Default schema structure to use if database query fails
 const DEFAULT_SCHEMA = {
     nodes: {
@@ -65,7 +31,6 @@ const DEFAULT_SCHEMA = {
             "documentId",
             "startChar",
             "endChar",
-            "description",
             "lemma",
             "pos",
             "dep",
@@ -79,10 +44,6 @@ const DEFAULT_SCHEMA = {
         "HAS_CHUNK",
         "HAS_ENTITY",
         "HAS_KEYWORD",
-        "EXPRESSES_CONCEPT",
-        "CONTAINS_ENTITY",
-        "CONTAINS_KEYWORD",
-        "CONTAINS_CONCEPT",
         "MENTIONS",
         "RELATED_TO",
         "PRECEDES",
@@ -94,17 +55,10 @@ const DEFAULT_SCHEMA = {
 export class LLMService {
     constructor(config = {}) {
         this.config = {
-            model: 'mistral',
-            
             maxRetries: 3,
             retryDelay: 1000,
             timeout: 30000,
-         
-...config
-                
-    
-            
-    
+            ...config
         };
 
         this.debug = this.config.debug;
@@ -146,32 +100,32 @@ export class LLMService {
                 CALL apoc.meta.schema() YIELD value
                 RETURN value
             `);
-            
+
             const nodes = {};
             const relationships = new Set();
-            
+
             if (nodeResult.records.length > 0) {
                 const schemaData = nodeResult.records[0].get('value');
-                
+
                 // Process nodes and their properties
                 for (const [nodeLabel, nodeData] of Object.entries(schemaData)) {
                     if (nodeData.type === 'node') {
                         nodes[nodeLabel] = Object.keys(nodeData.properties);
                     }
                 }
-                
+
                 // Get relationship types
                 const relResult = await session.run(`
                     CALL db.relationshipTypes() YIELD relationshipType
                     RETURN collect(relationshipType) as types
                 `);
-                
+
                 if (relResult.records.length > 0) {
                     const relTypes = relResult.records[0].get('types');
                     relTypes.forEach(type => relationships.add(type));
                 }
             }
-            
+
             return { nodes, relationships };
         } finally {
             await session.close();
@@ -214,7 +168,7 @@ export class LLMService {
 
     async streamLLM(prompt, temperature = 0.1, callbacks = {}) {
         this.log('Starting streaming LLM response');
-        
+
         try {
             const response = await axios.post(this.config.apiUrl, {
                 model: this.config.model,
@@ -226,20 +180,20 @@ export class LLMService {
             });
 
             let buffer = '';
-            
+
             response.data.on('data', (chunk) => {
                 const chunkStr = chunk.toString();
                 buffer += chunkStr;
-                
+
                 // Process complete JSON objects
                 let startIdx = 0;
                 let endIdx = buffer.indexOf('\n', startIdx);
-                
+
                 while (endIdx !== -1) {
                     const jsonStr = buffer.substring(startIdx, endIdx);
                     startIdx = endIdx + 1;
                     endIdx = buffer.indexOf('\n', startIdx);
-                    
+
                     try {
                         const data = JSON.parse(jsonStr);
                         if (data.response && callbacks.onData) {
@@ -249,23 +203,23 @@ export class LLMService {
                         // Skip invalid JSON
                     }
                 }
-                
+
                 // Keep the remaining incomplete JSON
                 buffer = buffer.substring(startIdx);
             });
-            
+
             response.data.on('end', () => {
                 if (callbacks.onEnd) {
                     callbacks.onEnd();
                 }
             });
-            
+
             response.data.on('error', (error) => {
                 if (callbacks.onError) {
                     callbacks.onError(error);
                 }
             });
-            
+
         } catch (error) {
             if (callbacks.onError) {
                 callbacks.onError(error);
@@ -290,7 +244,7 @@ Answer:`;
 
         return new Promise((resolve, reject) => {
             let fullResponse = '';
-            
+
             this.streamLLM(prompt, 0.1, {
                 onData: (data) => {
                     fullResponse += data;
@@ -355,7 +309,7 @@ Text: ${text}
                 if (colonIndex !== -1) {
                     const type = line.substring(0, colonIndex).trim();
                     const text = line.substring(colonIndex + 1).trim();
-                    
+
                     if (type && text) {
                         entities.push({
                             type: type.toUpperCase(),
@@ -399,16 +353,16 @@ Text: ${text}
             if (!this.dbSchema) {
                 await this.initialize();
             }
-            
+
             // Build database structure description from the schema
             const nodeDescriptions = Object.entries(this.dbSchema.nodes)
-                .map(([nodeType, properties]) => 
+                .map(([nodeType, properties]) =>
                     `- ${nodeType} nodes with properties: ${properties.join(', ')}`
                 );
-            
+
             const relationshipDescriptions = Array.from(this.dbSchema.relationships)
                 .map(relType => `- Relationships of type [:${relType}] between nodes`);
-            
+
             const dbStructure = [...nodeDescriptions, ...relationshipDescriptions].join('\n');
 
             const prompt = `
@@ -440,7 +394,7 @@ Follow these rules strictly:
             const response = await this.queryLLM(prompt, 0.2);
 
             this.log('LLM database query response received');
-            
+
             if (!response) {
                 throw new Error('Empty response from LLM');
             }
@@ -450,7 +404,7 @@ Follow these rules strictly:
                 .replace(/```[a-zA-Z]*\n/g, '')
                 .replace(/```/g, '')
                 .trim();
-                
+
             // Check if the query contains $userId parameter and modify it
             if (query.includes('$userId')) {
                 this.log('Query contains $userId parameter, removing it');

@@ -12,7 +12,7 @@ const __dirname = path.dirname(__filename);
 
 // Load environment variables from the root directory
 dotenv.config({ path: path.resolve(__dirname, '../../.env') });
- 
+
 // Constants
 
 // Initialize express app with security defaults
@@ -56,59 +56,15 @@ const docurag = new DocuGraphRAG({
 app.get('/documents', async (req, res) => {
     const session = driver.session();
     try {
-        // Query Neo4j for documents with all properties
         const result = await session.run(
             `MATCH (d:Document) 
-             WHERE d.userId = $userId 
-             RETURN d`,
+             RETURN d`
         );
-        
-        const documents = result.records.map(record => {
-            const doc = record.get('d').properties;
-            const neoQuery = `// 1. Check all Documents
-MATCH (d:Document)
-RETURN d;
-
-// 2. Check Document-Chunk connections
-MATCH (d:Document)-[r:HAS_CHUNK]->(c:DocumentChunk)
-RETURN d, r, c;
-
-// 3. Check Chunks to Entities
-MATCH (c:DocumentChunk)-[r]->(e:Entity)
-RETURN c, r, e;
-
-// 4. Check Chunks to Keywords
-MATCH (c:DocumentChunk)-[r]->(k:Keyword)
-RETURN c, r, k;
-
-// 5. Check Chunks to Concepts
-MATCH (c:DocumentChunk)-[r]->(co:Concept)
-RETURN c, r, co;
-
-// 6. Check for any ERROR nodes
-MATCH (e:ERROR)
-RETURN e;
-
-// 7. Check all relationships from chunks (to see what we might have missed)
-MATCH (c:DocumentChunk)-[r]-(x)
-RETURN c, type(r), x;`;
-            
-            return {
-                ...doc,
-                neoQuery
-            };
-        });
-
-        res.json({
-            success: true,
-            documents: documents
-        });
+        const documents = result.records.map(record => record.get('d').properties);
+        res.json(documents);
     } catch (error) {
         console.error('Error fetching documents:', error);
-        res.status(500).json({
-            success: false,
-            error: 'Failed to fetch documents'
-        });
+        res.status(500).json({ error: 'Error fetching documents' });
     } finally {
         await session.close();
     }
@@ -118,9 +74,9 @@ RETURN c, type(r), x;`;
 app.post('/upload', upload.single('pdf'), async (req, res) => {
     try {
         if (!req.file) {
-            return res.status(400).json({ 
+            return res.status(400).json({
                 success: false,
-                error: 'No PDF file uploaded' 
+                error: 'No PDF file uploaded'
             });
         }
 
@@ -136,7 +92,7 @@ app.post('/upload', upload.single('pdf'), async (req, res) => {
         });
     } catch (error) {
         console.error('Error handling document:', error);
-        res.status(500).json({ 
+        res.status(500).json({
             success: false,
             error: error.message || 'Failed to process document'
         });
@@ -148,13 +104,13 @@ app.post('/chat', async (req, res) => {
         // Accept either 'question' or 'message' from the request body
         const { question, message } = req.body;
         const userQuery = question || message;
-        
+
         console.log('Chat request:', { userQuery, originalBody: req.body });
-        
+
         if (!userQuery) {
-            return res.status(400).json({ 
-                success: false, 
-                error: 'Question is required. Please provide either a "question" or "message" field in your request.' 
+            return res.status(400).json({
+                success: false,
+                error: 'Question is required. Please provide either a "question" or "message" field in your request.'
             });
         }
 
@@ -162,7 +118,7 @@ app.post('/chat', async (req, res) => {
         res.json(result);
     } catch (error) {
         console.error('Error handling chat:', error);
-        res.status(500).json({ 
+        res.status(500).json({
             success: false,
             error: error.message || 'An unexpected error occurred with your request.'
         });
@@ -174,19 +130,19 @@ app.post('/cleanup', async (req, res) => {
     try {
         // Clean up all document data and resources using DocuGraphRAG
         await docurag.cleanup();
-        
+
         // Reinitialize DocuGraphRAG for future use
         await docurag.initialize();
-        
-        res.json({ 
-            success: true, 
-            message: 'Document removed successfully' 
+
+        res.json({
+            success: true,
+            message: 'Document removed successfully'
         });
     } catch (error) {
         console.error('Cleanup error:', error);
-        res.status(500).json({ 
-            success: false, 
-            error: error.message || 'Failed to remove document' 
+        res.status(500).json({
+            success: false,
+            error: error.message || 'Failed to remove document'
         });
     }
 });
@@ -200,7 +156,7 @@ async function startServer() {
         console.log('Initializing DocuRAG...');
         await docurag.initialize();
         console.log('DocuRAG initialized successfully');
-        
+
         const server = app.listen(port, () => {
             console.log(`Server running at http://localhost:${port}`);
         });

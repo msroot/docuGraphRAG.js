@@ -5,15 +5,8 @@ node_modules/
 dist/
 
 # Logs
-logs
 *.log
 npm-debug.log*
-
-# Runtime data
-pids
-*.pid
-*.seed
-*.pid.lock
 
 # Environment variables
 .env
@@ -28,4 +21,5 @@ pids
 .DS_Store
 Thumbs.db
 
+# Project specific
 uploads/

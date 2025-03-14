@@ -12,7 +12,7 @@ export class Processor {
         };
 
         this.debug = this.config.debug;
-        
+
         this.textSplitter = new RecursiveCharacterTextSplitter({
             chunkSize: this.config.chunkSize,
             chunkOverlap: this.config.chunkOverlap,
@@ -48,13 +48,13 @@ export class Processor {
             const text = await this.extractTextFromPDF(buffer);
             const chunks = await this.textSplitter.splitText(text);
             const documentId = uuidv4();
-            
+
             const processedChunks = chunks.map((chunk, index) => ({
                 text: chunk,
                 chunkIndex: index,
                 documentId
             }));
-            
+
             const metadata = {
                 documentId,
                 fileName,

@@ -22,10 +22,6 @@ const RELATIONSHIPS = {
     HAS_CHUNK: 'HAS_CHUNK',
     HAS_ENTITY: 'HAS_ENTITY',
     HAS_KEYWORD: 'HAS_KEYWORD',
-    EXPRESSES_CONCEPT: 'EXPRESSES_CONCEPT',
-    CONTAINS_ENTITY: 'CONTAINS_ENTITY',
-    CONTAINS_KEYWORD: 'CONTAINS_KEYWORD',
-    CONTAINS_CONCEPT: 'CONTAINS_CONCEPT',
     MENTIONS: 'MENTIONS',
     RELATED_TO: 'RELATED_TO'
 };
@@ -58,7 +54,7 @@ const ENTITY_TYPES = {
     KEYWORD: 'KEYWORD'    // Fallback for unrecognized types
 };
 
-const NODE_PROPERTIES = {    
+const NODE_PROPERTIES = {
     DOCUMENT_ID: 'documentId',
     FILE_NAME: 'fileName',
     FILE_TYPE: 'fileType',
@@ -71,7 +67,6 @@ const NODE_PROPERTIES = {
     START_CHAR: 'startChar',
     END_CHAR: 'endChar',
     UNIQUE_ID: 'uniqueId',
-    DESCRIPTION: 'description',
     LEMMA: 'lemma',
     POS: 'pos',
     DEP: 'dep',
@@ -81,21 +76,21 @@ const NODE_PROPERTIES = {
     CONFIDENCE_SCORE: 'confidenceScore'
 };
 
- 
+
 
 export class DocuGraphRAG {
     constructor(config = {}) {
-        
+
         this.config = {
-             neo4jUrl: 'bolt://localhost:7687',
-    neo4jUser: 'neo4j',
-    neo4jPassword: 'password',
-    spacyApiUrl: 'http://localhost:8080',
-    ollamaApiUrl: 'http://localhost:11434/api/generate',
-    chunkSize: 1000,
-    chunkOverlap: 200,
-    searchLimit: 3,
-    debug: false,
+            neo4jUrl: 'bolt://localhost:7687',
+            neo4jUser: 'neo4j',
+            neo4jPassword: 'password',
+            spacyApiUrl: 'http://localhost:8080',
+            ollamaApiUrl: 'http://localhost:11434/api/generate',
+            chunkSize: 1000,
+            chunkOverlap: 200,
+            searchLimit: 3,
+            debug: false,
             ...config,
         };
 
@@ -115,7 +110,7 @@ export class DocuGraphRAG {
     log(step, methodName, message, context = {}) {
         if (this.debug) {
             const className = this.constructor.name;
-            
+
             // Format the log message
             console.log(
                 `[Step: ${step}][${className}][${methodName}]: ${message}`,
@@ -145,9 +140,11 @@ export class DocuGraphRAG {
             // Initialize LLM service
             this.llm = new LLMService({
                 driver: this.driver,
-                debug: this.debug
+                debug: this.debug,
+                apiUrl: this.config.ollamaApiUrl,
+                model: 'mistral:7b'
             });
-            
+
             // Initialize the LLM service to fetch the schema once
             await this.llm.initialize();
 
@@ -171,13 +168,13 @@ export class DocuGraphRAG {
         console.log("cypherQuery:", cypherQuery)
         // Split the query into CREATE and MERGE parts
         const [createPart, ...mergeParts] = cypherQuery.split(/MERGE\s+/);
-        
+
         if (!createPart) return null;
 
         // Process CREATE statements
         let validCreateStatements = [];
         const createNodes = createPart.replace(/CREATE\s+/, '').split(',');
-        
+
         for (const node of createNodes) {
             // Validate node has Entity label and proper structure
             if (node.includes(':Entity')) {
@@ -191,10 +188,10 @@ export class DocuGraphRAG {
                             .replace(/'/g, '"')           // Replace single quotes with double quotes
                             .replace(/\s*,\s*/g, ',')     // Clean up spaces around commas
                             .trim();
-                        
+
                         // Validate JSON structure
                         const properties = JSON.parse(`{${propertyStr}}`);
-                        
+
                         // Reconstruct node with validated properties
                         const nodeAlias = node.match(/\(([^:]+):/)?.[1] || 'n' + validCreateStatements.length;
                         const validNode = `(${nodeAlias}:Entity ${JSON.stringify(properties)})`;
@@ -213,7 +210,7 @@ export class DocuGraphRAG {
 
         // Process MERGE statements for relationships
         let validMergeStatements = [];
-        
+
         for (const mergePart of mergeParts) {
             const relationshipMatch = mergePart.match(/\((.*?)\)-\[:([^\]]+)\]->\((.*?)\)/);
             if (relationshipMatch) {
@@ -240,10 +237,10 @@ export class DocuGraphRAG {
 
         // Extract the Cypher query from the response
         let cypherQuery = response.response;
-        
+
         // Remove markdown code blocks if present
         cypherQuery = cypherQuery.replace(/```cypher\n/g, '').replace(/```/g, '');
-        
+
         // Validate the query
         const validatedQuery = await this.validateCypherQuery(cypherQuery);
         if (!validatedQuery) {
@@ -270,7 +267,7 @@ export class DocuGraphRAG {
         try {
             this.log('1', 'processDocument', 'Starting document processing');
             const { metadata, chunks } = await this.processor.processDocument(buffer, fileName);
-            this.log('2', 'processDocument', 'Document processed into chunks', { 
+            this.log('2', 'processDocument', 'Document processed into chunks', {
                 documentId: metadata.documentId,
                 totalChunks: chunks.length
             });
@@ -319,7 +316,7 @@ export class DocuGraphRAG {
                             CREATE (d)-[:${this.RELATIONSHIPS.HAS_CHUNK}]->(c)
                             RETURN c
                         `, {
-                            documentId: metadata.documentId,                            
+                            documentId: metadata.documentId,
                             content: chunk.text,
                             index: chunk.chunkIndex,
                             startChar: chunk.startChar || 0,
@@ -340,7 +337,7 @@ export class DocuGraphRAG {
                         });
 
                         const entityResult = await this.extractEntities(chunk.text, chunk.chunkIndex, metadata.documentId);
-                        
+
                         this.log('7', 'processDocument', 'Entity extraction completed', {
                             ...entityResult,
                             chunkIndex: i,
@@ -378,14 +375,14 @@ export class DocuGraphRAG {
             try {
                 const result = await session.run(dbQuery);
                 let contextParts = [];
-                
+
                 result.records.forEach((record) => {
                     const keys = record.keys;
                     const content = record.get('content') || record.get('c.content');
                     if (content) {
                         contextParts.push(content);
                     }
-                    
+
                     const entities = record.get('entities');
                     if (entities && Array.isArray(entities) && entities.length > 0) {
                         const entityContext = entities
@@ -413,7 +410,7 @@ export class DocuGraphRAG {
                 });
 
                 const context = contextParts.join('\n\n');
-                
+
                 if (options.onData) {
                     await this.llm.generateStreamingAnswer(question, context, {
                         onData: (data) => {
@@ -457,7 +454,7 @@ export class DocuGraphRAG {
                 documentId,
                 textLength: text?.length || 0
             });
-            
+
             this.log('2', 'extractEntities', 'Calling SpaCy API', {
                 chunkId
             });
@@ -467,7 +464,7 @@ export class DocuGraphRAG {
                 features: ["ents", "dep", "relations", "syntax", "tokens"]
             });
 
-            this.log('3', 'extractEntities', 'SpaCy API response received', { 
+            this.log('3', 'extractEntities', 'SpaCy API response received', {
                 chunkId,
                 entitiesFound: response.data?.length || 0,
                 entities: response.data?.map(ent => ({
@@ -503,7 +500,7 @@ export class DocuGraphRAG {
                 }))
                 .filter(ent => ent.text && ent.type);
 
-            this.log('6', 'extractEntities', 'Entities mapped', { 
+            this.log('6', 'extractEntities', 'Entities mapped', {
                 totalEntities: entities.length,
                 entityTypes: [...new Set(entities.map(e => e.type))]
             });
@@ -519,14 +516,13 @@ export class DocuGraphRAG {
             this.log('8', 'extractEntities', 'Generating Cypher statements', {
                 chunkId
             });
-            const createStatements = entities.map((entity, index) => 
+            const createStatements = entities.map((entity, index) =>
                 `CREATE (e${index}:${this.NODE_LABELS.ENTITY}:${entity.type} {
                     ${this.NODE_PROPERTIES.TEXT}: '${entity.text.replace(/'/g, "\\'")}',
                     ${this.NODE_PROPERTIES.TYPE}: '${entity.type}',
                     ${this.NODE_PROPERTIES.DOCUMENT_ID}: $documentId,
                     ${this.NODE_PROPERTIES.START_CHAR}: ${entity.start},
                     ${this.NODE_PROPERTIES.END_CHAR}: ${entity.end},
-                    ${this.NODE_PROPERTIES.DESCRIPTION}: '${(entity.description || '').replace(/'/g, "\\'")}',
                     ${this.NODE_PROPERTIES.LEMMA}: '${(entity.lemma || '').replace(/'/g, "\\'")}',
                     ${this.NODE_PROPERTIES.POS}: '${entity.pos}',
                     ${this.NODE_PROPERTIES.DEP}: '${entity.dep}',
@@ -541,14 +537,14 @@ export class DocuGraphRAG {
             // Create relationships between entities
             this.log('10', 'extractEntities', 'Generating relationship statements');
             const relationshipStatements = [];
-            
+
             // Process SpaCy relations
             if (response.data.relations) {
                 this.log('10.1', 'extractEntities', 'Processing SpaCy relations');
                 response.data.relations.forEach((rel, idx) => {
                     const sourceIdx = entities.findIndex(e => e.start === rel.source.start && e.end === rel.source.end);
                     const targetIdx = entities.findIndex(e => e.start === rel.target.start && e.end === rel.target.end);
-                    
+
                     if (sourceIdx !== -1 && targetIdx !== -1) {
                         relationshipStatements.push(
                             `CREATE (e${sourceIdx})-[:${rel.type.toUpperCase()} {
@@ -566,7 +562,7 @@ export class DocuGraphRAG {
             this.log('10.2', 'extractEntities', 'Processing syntactic and positional relationships');
             for (let i = 0; i < entities.length; i++) {
                 const entity = entities[i];
-                
+
                 // Dependency relations
                 if (entity.dep) {
                     const headIdx = entities.findIndex(e => e.start === entity.head?.start && e.end === entity.head?.end);
@@ -633,23 +629,23 @@ export class DocuGraphRAG {
                 ${createStatements.join('\n')}
                 
                 // Link entities to their chunk with document scope
-                ${entities.map((_, index) => 
-                    `CREATE (c)-[:${this.RELATIONSHIPS.HAS_ENTITY} {
+                ${entities.map((_, index) =>
+                `CREATE (c)-[:${this.RELATIONSHIPS.HAS_ENTITY} {
                         ${this.NODE_PROPERTIES.DOCUMENT_ID}: $documentId
                     }]->(e${index})`
-                ).join('\n')}
+            ).join('\n')}
                 
                 // Create relationships between entities within document scope
                 ${relationshipStatements.join('\n')}
                 
                 RETURN count(DISTINCT e0) as entityCount, count(*) as relationshipCount
             `;
-            
+
             this.log('13', 'extractEntities', 'Final query built', {
                 chunkId,
                 createStatementsCount: createStatements.length,
                 relationshipStatementsCount: relationshipStatements.length,
-                query: cypherQuery                    
+                query: cypherQuery
             });
 
             // Before executing the query, verify the chunk exists
@@ -663,7 +659,7 @@ export class DocuGraphRAG {
                      RETURN c`,
                     { chunkId, documentId }
                 );
-                
+
                 if (!verifyChunk.records.length) {
                     throw new Error(`No chunk found with index ${chunkId}`);
                 }
@@ -680,8 +676,8 @@ export class DocuGraphRAG {
                     entityCount: stats.get('entityCount'),
                     relationshipCount: stats.get('relationshipCount')
                 });
-                return { 
-                    success: true, 
+                return {
+                    success: true,
                     entitiesCount: stats.get('entityCount'),
                     relationshipsCount: stats.get('relationshipCount')
                 };
@@ -719,7 +715,7 @@ export class DocuGraphRAG {
                     labels(e) as labels,
                     c.${this.NODE_PROPERTIES.INDEX} as chunkIndex
             `, { documentId });
-            
+
             return result.records.map(record => ({
                 text: record.get('text'),
                 type: record.get('type'),
@@ -736,14 +732,14 @@ export class DocuGraphRAG {
 
     async cleanup() {
         this.log('1', 'cleanup', 'Starting cleanup process');
-        
+
         try {
             // Delete all document-related data from the database
             if (this.driver) {
                 const session = this.driver.session();
                 try {
                     this.log('2', 'cleanup', 'Deleting all document data from Neo4j');
-                    
+
                     // Use a single transaction to delete all document-related data
                     await session.executeWrite(async tx => {
                         // Delete all entity relationships first
@@ -752,7 +748,7 @@ export class DocuGraphRAG {
                             WHERE type(r) IN ['${Object.values(this.RELATIONSHIPS).join("','")}']
                             DELETE r
                         `);
-                        
+
                         // Delete all nodes in one query
                         await tx.run(`
                             MATCH (n)
@@ -762,7 +758,7 @@ export class DocuGraphRAG {
                             DELETE n
                         `);
                     });
-                    
+
                     this.log('3', 'cleanup', 'Successfully deleted all document data');
                 } catch (dbError) {
                     this.log('ERROR', 'cleanup', 'Error deleting document data', { error: dbError.message });
@@ -770,18 +766,18 @@ export class DocuGraphRAG {
                 } finally {
                     await session.close();
                 }
-                
+
                 // Close Neo4j driver
                 this.log('4', 'cleanup', 'Closing Neo4j driver');
                 await this.driver.close();
                 this.driver = null;
             }
-            
+
             // Reset state
             this.initialized = false;
             this.processor = null;
             this.llm = null;
-            
+
             this.log('5', 'cleanup', 'Cleanup completed successfully');
             return true;
         } catch (error) {
