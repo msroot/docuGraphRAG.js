@@ -81,27 +81,22 @@ const NODE_PROPERTIES = {
     CONFIDENCE_SCORE: 'confidenceScore'
 };
 
+ 
+
 export class DocuGraphRAG {
     constructor(config = {}) {
-        // Debug logging for environment variables
-        if (process.env.DEBUG) {
-            console.log('Environment variables loaded:', {
-                neo4jUrl: process.env.NEO4J_URL,
-                neo4jUser: process.env.NEO4J_USER,
-                spacyApiUrl: process.env.SPACY_API_URL
-            });
-        }
-
+        
         this.config = {
-            neo4jUrl: process.env.NEO4J_URL,
-            neo4jUser: process.env.NEO4J_USER,
-            neo4jPassword: process.env.NEO4J_PASSWORD,
-            spacyApiUrl: process.env.SPACY_API_URL,
-            chunkSize: 1000,
-            chunkOverlap: 200,
-            searchLimit: 3,
-            debug: process.env.DEBUG === 'true' || config.debug === true,
-            ...config
+             neo4jUrl: 'bolt://localhost:7687',
+    neo4jUser: 'neo4j',
+    neo4jPassword: 'password',
+    spacyApiUrl: 'http://localhost:8080',
+    ollamaApiUrl: 'http://localhost:11434/api/generate',
+    chunkSize: 1000,
+    chunkOverlap: 200,
+    searchLimit: 3,
+    debug: false,
+            ...config,
         };
 
         this.debug = this.config.debug;

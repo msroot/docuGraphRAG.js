@@ -7,16 +7,7 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const LLM_CONFIG = {
-    MODEL: 'mistral',
-    MAX_RETRIES: 3,
-    RETRY_DELAY: 1000,
-    TIMEOUT: 30000,
-    DEBUG: false
-};
-
-// Ollama API URL constant
-const OLLAMA_API_URL = 'http://localhost:11434/api/generate';
+ 
 
 // Constants for Neo4j relationships and entity types
 const RELATIONSHIPS = {
@@ -103,11 +94,17 @@ const DEFAULT_SCHEMA = {
 export class LLMService {
     constructor(config = {}) {
         this.config = {
-            model: config.model || LLM_CONFIG.MODEL,
-            debug: config.debug ?? LLM_CONFIG.DEBUG,
-            maxRetries: config.maxRetries || LLM_CONFIG.MAX_RETRIES,
-            retryDelay: config.retryDelay || LLM_CONFIG.RETRY_DELAY,
-            timeout: config.timeout || LLM_CONFIG.TIMEOUT
+            model: 'mistral',
+            
+            maxRetries: 3,
+            retryDelay: 1000,
+            timeout: 30000,
+         
+...config
+                
+    
+            
+    
         };
 
         this.debug = this.config.debug;
@@ -202,7 +199,7 @@ export class LLMService {
 
     async queryLLM(prompt, temperature = 0.1) {
         const result = await this.retryRequest(async () => {
-            const response = await axios.post(OLLAMA_API_URL, {
+            const response = await axios.post(this.config.apiUrl, {
                 model: this.config.model,
                 prompt: prompt,
                 temperature: temperature,
@@ -219,7 +216,7 @@ export class LLMService {
         this.log('Starting streaming LLM response');
         
         try {
-            const response = await axios.post(OLLAMA_API_URL, {
+            const response = await axios.post(this.config.apiUrl, {
                 model: this.config.model,
                 prompt: prompt,
                 temperature: temperature,

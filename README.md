@@ -1,277 +1,186 @@
-# docuGraphRAG.js
+# 🚀 docuGraphRAG.js
 
-💡 Chat with your PDF documents
+A document processing and RAG (Retrieval-Augmented Generation) library that converts documents into knowledge graphs. Uses graph databases for context retrieval and enables document interaction through local LLMs.
 
-A JavaScript library for building RAG-powered document question-answering systems. 
-docuGraphRAG.js provides a streamlined solution for implementing Retrieval-Augmented Generation with support for multiple vector stores (Neo4j and Qdrant) and local LLM integration.
+## 📖 Project Evolution
 
+docuGraphRAG.js builds upon [docuRAG.js](https://github.com/msroot/docuRAG.js/) with a focus on graph-based document representation:
 
+- **docuRAG.js**: Uses Qdrant vector database for similarity search
+- **docuGraphRAG.js**: Uses Neo4j graph database for relationship modeling
 
-![docuGraphRAG.js Demo](https://raw.githubusercontent.com/msroot/docuGraphRAG.js/main/docs/demo.gif)
+Key improvements:
+- Pattern-based querying
+- Explicit relationship modeling
+- Multi-hop reasoning
+- Relationship metadata preservation
 
+## ✨ Features
 
-[![npm version](https://img.shields.io/npm/v/docugraphrag.svg)](https://www.npmjs.com/package/docugraphrag)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+- 📄 Document chunking and processing
+- 🔍 SpaCy-based entity extraction
+- 📊 Neo4j graph representation
+- 🤖 Ollama LLM integration
+- 🎯 Semantic search
+- 📡 Response streaming
+- 🔄 Relationship inference
+- 🎨 Neo4j Browser visualization
 
+## 🛠️ Prerequisites
 
-## Core Features
+- Docker & Docker Compose
+- Node.js 18+
+- 8GB free disk space (Mistral model: 4GB)
 
-- **LLM Integration**: Flexible local LLM support with streaming responses
-- **Vector Storage**: Multiple vector store support
-  - Neo4j (with dot product similarity)
-  - Qdrant (with cosine similarity)
-- **Text Processing**: RecursiveCharacterTextSplitter from LangChain
-- **Streaming Responses**: Server-Sent Events (SSE) for real-time chat responses
-- **PDF Processing**: Automatic PDF text extraction and chunking
-- **Session Management**: Built-in session handling for document contexts
-- **Framework Agnostic**: Can be used with any Node.js framework
+## 🚀 Quick Start
 
-
-## Quick Start
-
-### Prerequisites
-- Modern JavaScript runtime (Node.js 18+ for server-side)
-- Running vector store instance (Neo4j or Qdrant)
-- Local LLM server (e.g., Ollama with Llama2)
-  > ⚠️ Note: Currently tested and optimized for Llama2. Other models may work but are not officially supported.
-
-### Setup
-
-#### Using Neo4j
+1. Clone and enter directory:
 ```bash
-# Start Neo4j
-docker run \
-  --name neo4j \
-  -p 7474:7474 -p 7687:7687 \
-  -e NEO4J_AUTH=neo4j/password123 \
-  neo4j:latest
-
-# Start Llama2
-ollama run llama2
-
-# Install docuGraphRAG
-npm install docugraphrag
+git clone https://github.com/yourusername/docuGraphRAG.js.git
+cd docuGraphRAG.js
 ```
 
-#### Using Qdrant
+2. Start services:
 ```bash
-# Start Qdrant
-docker run -p 6333:6333 qdrant/qdrant
+docker-compose up -d
+```
+> ⚠️ First run downloads Mistral model (~4GB)
 
-# Start Llama2
-ollama run llama2
-
-# Install docuGraphRAG
-npm install docugraphrag
+3. Install dependencies:
+```bash
+npm install
 ```
 
-### Basic Usage
+## 🌐 Services
 
-#### With Neo4j
+- Neo4j: http://localhost:7474 (neo4j/password)
+- SpaCy: http://localhost:8080
+- Ollama: http://localhost:11434
+
+## 💻 Usage
+
 ```javascript
 import { DocuGraphRAG } from 'docugraphrag';
-
-// Initialize DocuGraphRAG with Neo4j
-const docuGraphRAG = new DocuGraphRAG({
-    vectorStore: 'neo4j',
-    vectorStoreConfig: {
-        url: 'bolt://localhost:7687',
-        user: 'neo4j',
-        password: 'password123'
-    },
-    llmUrl: 'http://localhost:11434'
-});
 
 // Initialize
-await docuGraphRAG.initialize();
-
-// Process a PDF
-const pdfBuffer = await fs.readFile('document.pdf');
-await docuGraphRAG.processPDFBuffer(pdfBuffer, 'document.pdf');
-
-// Chat with streaming
-await docuGraphRAG.chat("What is this document about?", {
-    onData: (data) => console.log(data.response),
-    onEnd: () => console.log("Done"),
-    onError: (error) => console.error(error)
+const rag = new DocuGraphRAG({
+  neo4jUrl: 'bolt://localhost:7687',
+  neo4jUser: 'neo4j',
+  neo4jPassword: 'password',
+  debug: true
 });
 
-// Clean up when done
-await docuGraphRAG.cleanup();
+await rag.initialize();
+
+// Process document
+const buffer = fs.readFileSync('document.pdf');
+const result = await rag.processDocument(buffer, 'document.pdf');
+
+// Query document
+const response = await rag.chat('What is the main topic?');
+console.log(response.answer);
 ```
 
-#### With Qdrant
-```javascript
-import { DocuGraphRAG } from 'docugraphrag';
+## 🏗️ Architecture
 
-// Initialize DocuGraphRAG with Qdrant
-const docuGraphRAG = new DocuGraphRAG({
-    vectorStore: 'qdrant',
-    vectorStoreConfig: {
-        url: 'http://localhost:6333',
-        vectorSize: 3072,
-        vectorDistance: 'Cosine'
-    },
-    llmUrl: 'http://localhost:11434'
-});
+The system processes documents through five main stages:
 
-// Rest of the usage is the same as Neo4j example
-```
+1. Document Processing: Text extraction and semantic chunking
+2. Entity Analysis: NLP-based entity and relationship extraction via SpaCy
+3. Graph Construction: Building Neo4j graph from entities and relationships
+4. Context Retrieval: Query-based graph traversal for relevant segments
+5. Response Generation: LLM-powered answer synthesis from retrieved context
 
-## Configuration Options
-
-```javascript
-{
-    // Vector Store Selection
-    vectorStore: 'neo4j' | 'qdrant',
+```mermaid
+graph TD
+    PDF[Document Input<br/>PDF/Text] --> Parser[Document Parser]
+    Parser --> Chunks[Text Chunks]
+    Chunks --> NLP[SpaCy NLP Engine]
     
-    // Neo4j Configuration
-    vectorStoreConfig: {
-        url: string,        // Neo4j URL (e.g., 'bolt://localhost:7687')
-        user: string,       // Neo4j username
-        password: string    // Neo4j password
-    }
+    NLP --> |Extract Entities| Entities[Named Entities<br/>People, Places, Dates]
+    NLP --> |Extract Relations| Relations[Entity Relations<br/>Links & Connections]
     
-    // OR Qdrant Configuration
-    vectorStoreConfig: {
-        url: string,           // Qdrant server URL
-        vectorSize: number,    // Default: 3072
-        vectorDistance: string // Default: 'Cosine'
-    },
+    Entities --> Graph[Knowledge Graph Builder]
+    Relations --> Graph
+    Graph --> Neo4j[Neo4j Graph Database<br/>Nodes & Relationships]
+    
+    Question[User Question] --> Generator[AI Query Generator]
+    Generator --> |Dynamic Graph Query| Neo4j
+    Neo4j --> |Graph Traversal| Context[Relevant Context]
+    Context --> Answer[AI Answer Generation<br/>Local LLM]
+    Answer --> Response[Response to User]
 
-    // LLM Configuration
-    llmUrl: string,        // LLM server URL
-    llmModel: string,      // Default: 'llama3.2'
-
-    // Text Processing
-    chunkSize: number,     // Default: 1000
-    chunkOverlap: number,  // Default: 200
-    searchLimit: number    // Default: 3
-}
+    style PDF fill:#f9d,stroke:#333
+    style Question fill:#9df,stroke:#333
+    style Response fill:#9f9,stroke:#333
+    style NLP fill:#fcf,stroke:#333
+    style Neo4j fill:#ffc,stroke:#333
+    style Generator fill:#fcf,stroke:#333
+    style Answer fill:#fcf,stroke:#333
+    style Parser fill:#fcf,stroke:#333
+    style Entities fill:#fcf,stroke:#333
+    style Relations fill:#fcf,stroke:#333
+    style Graph fill:#fcf,stroke:#333
+    style Context fill:#ffc,stroke:#333
+    style Chunks fill:#f9d,stroke:#333
 ```
 
+## ⚙️ Configuration
 
-## Examples
-- [Express Example](./examples/express) - Complete implementation with UI
-- [NestJS Example](./examples/nest) - Same features, NestJS implementation
+| Option | Description | Default |
+|--------|-------------|---------|
+| neo4jUrl | Neo4j URL | bolt://localhost:7687 |
+| neo4jUser | Neo4j username | neo4j |
+| neo4jPassword | Neo4j password | password |
+| spacyApiUrl | SpaCy endpoint | http://localhost:8080 |
+| ollamaApiUrl | Ollama endpoint | http://localhost:11434/api/generate |
+| chunkSize | Document chunk size | 1000 |
+| chunkOverlap | Chunk overlap | 200 |
+| searchLimit | Max results | 3 |
+| debug | Debug mode | false |
 
+## 🔧 Troubleshooting
 
-## Contributing
+1. **Neo4j**
+   - Check container: `docker ps`
+   - View logs: `docker logs neo4j`
+   - Verify config
 
-Areas for contribution:
-- Additional vector store integrations
-- Alternative LLM providers
-- Enhanced chunking strategies
-- Performance optimizations
-- Testing infrastructure
+2. **SpaCy**
+   - Check container: `docker ps`
+   - View logs: `docker logs spacyapi`
 
-## License
+3. **Ollama**
+   - Check model: `docker logs ollama`
+   - Test API: `curl http://localhost:11434/api/generate`
 
-MIT License - see [LICENSE](LICENSE)
+## 📚 Examples
 
-## Resources
+See `examples/` for:
+- Express integration
+- Document processing
+- Query patterns
+- Entity extraction
 
-- [Neo4j Documentation](https://neo4j.com/docs/)
-- [Qdrant Documentation](https://qdrant.tech/documentation/)
-- [LangChain JS](https://js.langchain.com/)
-- [Ollama](https://ollama.ai/)
-- [LLama2](https://ai.meta.com/llama/)
+## 🤝 Contributing
+
+Submit Pull Requests for:
+- Bug fixes
+- New features
+- Documentation
+- Tests
+
+## 📝 License
+
+MIT License - See [LICENSE](LICENSE)
+
+## 🙏 Acknowledgments
+
+Built with:
+- [Neo4j](https://neo4j.com/) - Graph Database
+- [SpaCy](https://spacy.io/) - NLP
+- [Ollama](https://ollama.ai/) - LLM
+- [Node.js](https://nodejs.org/) - Runtime
 
 ---
-Built with ❤️ by [Yannis Kolovos](http://msroot.me/)
-
-## Features
-
-- PDF document processing
-- Vector storage support:
-  - Neo4j (with dot product similarity)
-  - More coming soon...
-- LLM integration with Ollama
-- Streaming responses
-- Source citations
-
-## Installation
-
-```bash
-npm install docugraphrag
-```
-
-## Examples
-
-The repository includes several examples demonstrating different use cases and configurations:
-
-### Neo4j Example
-Located in `examples/neo4j/`, this example shows how to:
-- Set up DocuGraphRAG with Neo4j as the vector store
-- Process and query PDF documents
-- Get responses with source citations
-
-See the [Neo4j Example README](examples/neo4j/README.md) for details.
-
-### NestJS Example
-Located in `examples/nest/`, this example demonstrates:
-- Integration with NestJS framework
-- REST API endpoints for document upload and chat
-- Streaming responses
-
-See the [NestJS Example README](examples/nest/README.md) for details.
-
-## Basic Usage
-
-```javascript
-import { DocuGraphRAG } from 'docugraphrag';
-
-// Initialize with Neo4j vector store
-const docuGraphRAG = new DocuGraphRAG({
-    vectorStore: 'neo4j',
-    vectorStoreConfig: {
-        url: 'bolt://localhost:7687',
-        user: 'neo4j',
-        password: 'password123'
-    }
-});
-
-// Initialize
-await docuGraphRAG.initialize();
-
-// Process a PDF
-const pdfBuffer = await fs.readFile('document.pdf');
-await docuGraphRAG.processPDFBuffer(pdfBuffer, 'document.pdf');
-
-// Ask questions
-const response = await docuGraphRAG.chat('What is this document about?');
-console.log(response.response);
-console.log('Sources:', response.sources);
-
-// Cleanup when done
-await docuGraphRAG.cleanup();
-```
-
-## Configuration
-
-The DocuGraphRAG constructor accepts a configuration object with the following options:
-
-```javascript
-{
-    // Vector store configuration
-    vectorStore: 'neo4j', // Currently supported: 'neo4j'
-    vectorStoreConfig: {
-        url: 'bolt://localhost:7687',
-        user: 'neo4j',
-        password: 'password123'
-    },
-    
-    // LLM configuration
-    llmUrl: 'http://localhost:11434',
-    llmModel: 'llama2',
-    
-    // Text processing configuration
-    chunkSize: 1000,
-    chunkOverlap: 200,
-    searchLimit: 3
-}
-```
-
-## License
-
-MIT
+👨‍💻 🚀 ❤️ By [Yannis Kolovos](http://msroot.me)
