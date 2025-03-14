@@ -1,4 +1,4 @@
-# 🚀 docuGraphRAG.js
+# 🚀 docuGraphRAG.js [WIP]
 
 A document processing and RAG (Retrieval-Augmented Generation) library that converts documents into knowledge graphs. Uses graph databases for context retrieval and enables document interaction through local LLMs.
 
@@ -39,7 +39,7 @@ Key improvements:
 
 1. Clone and enter directory:
 ```bash
-git clone https://github.com/yourusername/docuGraphRAG.js.git
+git clone https://github.com/msroot/docuGraphRAG.js.git
 cd docuGraphRAG.js
 ```
 
