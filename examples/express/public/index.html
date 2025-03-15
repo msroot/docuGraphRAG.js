@@ -458,7 +458,7 @@
             docElement.className = 'document-item';
             docElement.dataset.id = documentId;
             docElement.innerHTML = `
-                <input type="checkbox" class="document-checkbox" ${doc.selected ? 'checked' : ''}>
+                <input type="checkbox" class="document-checkbox" value="${documentId}" ${doc.selected ? 'checked' : ''}>
                 <div class="document-info">
                     <div class="document-name">${doc.name || doc.id}</div>
                     <div class="document-date">${new Date(doc.uploadedAt).toLocaleDateString()}</div>
@@ -711,59 +711,90 @@
 
         // Modified sendMessage to include selected document IDs
         async function sendMessage() {
-            const input = document.getElementById('user-input');
-            const message = input.value.trim();
-            if (!message) return;
+            const messageInput = document.getElementById('user-input');
+            const chatMessages = document.getElementById('chat-container');
+            const question = messageInput.value.trim();
+            
+            if (!question) return;
 
             // Get selected document IDs
-            const selectedDocIds = Array.from(documents.values())
-                .filter(doc => doc.selected)
-                .map(doc => doc.id);
+            const selectedDocuments = Array.from(document.querySelectorAll('.document-checkbox:checked'))
+                .map(checkbox => checkbox.getAttribute('value'))
+                .filter(id => id); // Filter out any null/undefined values
 
-            if (selectedDocIds.length === 0) {
-                addMessageToChat('assistant', 'Please select at least one document to chat about.');
+            if (selectedDocuments.length === 0) {
+                alert('Please select at least one document');
                 return;
             }
 
-            // Add user message to chat
-            addMessageToChat('user', message);
-            input.value = '';
+            console.log('Selected documents:', selectedDocuments);
 
-            // Add thinking message
-            const thinkingMessage = addMessageToChat('assistant', 'Thinking...');
+            // Add user message
+            const userMessageDiv = document.createElement('div');
+            userMessageDiv.className = 'message user-message';
+            userMessageDiv.textContent = question;
+            chatMessages.appendChild(userMessageDiv);
+
+            // Add assistant message container
+            const assistantMessageDiv = document.createElement('div');
+            assistantMessageDiv.className = 'message assistant-message';
+            chatMessages.appendChild(assistantMessageDiv);
+
+            // Clear input
+            messageInput.value = '';
+            chatMessages.scrollTop = chatMessages.scrollHeight;
 
             try {
-                const response = await fetch(`${API_ENDPOINT}/chat`, {
+                const response = await fetch('/chat', {
                     method: 'POST',
                     headers: {
-                        'Content-Type': 'application/json'
+                        'Content-Type': 'application/json',
                     },
-                    body: JSON.stringify({ 
-                        question: message,
-                        documentIds: selectedDocIds
+                    body: JSON.stringify({
+                        question,
+                        documentIds: selectedDocuments
                     })
                 });
 
-                if (!response.ok) {
-                    throw new Error(`Failed to get response: ${response.status} ${response.statusText}`);
-                }
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let assistantResponse = '';
 
-                // Remove thinking message
-                thinkingMessage.remove();
-                
-                const data = await response.json();
-                if (data.error) {
-                    addMessageToChat('assistant', 'Error: ' + data.error);
-                } else if (data.answer) {
-                    addMessageToChat('assistant', data.answer);
-                } else {
-                    addMessageToChat('assistant', 'No answer found.');
+                while (true) {
+                    const { value, done } = await reader.read();
+                    if (done) break;
+
+                    const chunk = decoder.decode(value);
+                    const lines = chunk.split('\n');
+
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            const data = line.slice(5);
+                            if (data === '[DONE]') break;
+
+                            try {
+                                const parsed = JSON.parse(data);
+                                if (parsed.error) {
+                                    assistantMessageDiv.textContent = parsed.error;
+                                    break;
+                                }
+                                if (parsed.content) {
+                                    assistantResponse += parsed.content;
+                                    assistantMessageDiv.innerHTML = marked.parse(assistantResponse);
+                                    chatMessages.scrollTop = chatMessages.scrollHeight;
+                                }
+                            } catch (e) {
+                                console.error('Error parsing SSE data:', e);
+                            }
+                        }
+                    }
                 }
             } catch (error) {
-                console.error('Error sending message:', error);
-                thinkingMessage.remove();
-                addMessageToChat('assistant', `Sorry, there was an error: ${error.message}`);
+                console.error('Error:', error);
+                assistantMessageDiv.textContent = 'An error occurred while processing your question. Please try again.';
             }
+
+            chatMessages.scrollTop = chatMessages.scrollHeight;
         }
 
         // Clear chat
