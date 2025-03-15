@@ -86,11 +86,12 @@ export class DocuGraphRAG {
             });
 
             // Initialize GraphTraversal service with the existing driver
-            this.graphTraversal = new GraphTraversalService({
-                ...this.config,
-                driver: this.driver,
-                debug: this.debug
-            });
+            this.graphTraversal = null; // Temporarily disabled
+            // this.graphTraversal = new GraphTraversalService({
+            //     ...this.config,
+            //     driver: this.driver,
+            //     debug: this.debug
+            // });
 
             // Create basic indexes
             const session = this.driver.session();
@@ -302,73 +303,52 @@ export class DocuGraphRAG {
     }
 
     async enhancedChat(question, options = {}) {
-        const questionEmbedding = await this.llm.getEmbedding(question);
+        try {
+            const { documentIds } = options;
 
-        // Gather context using multiple strategies
-        const [
-            vectorResults,
-            pathResults,
-            temporalResults,
-            reasoningResults
-        ] = await Promise.all([
-            this.llm.searchSimilarChunks(question, options.documentId),
-            this.graphTraversal.findPathBasedContext(question),
-            this.graphTraversal.findTemporalContext(new Date()),
-            this.graphTraversal.performKnowledgeReasoning(question, questionEmbedding)
-        ]);
-
-        // Extract potential entities from the question
-        const entityMatches = await this.findEntitiesInQuestion(question);
-
-        // If we found entities, expand their context
-        let entityContexts = [];
-        if (entityMatches.length > 0) {
-            const entityContextPromises = entityMatches.map(entity =>
-                this.graphTraversal.expandEntityContext(entity.text)
-            );
-            entityContexts = await Promise.all(entityContextPromises);
-        }
-
-        // If we have multiple entities, find paths between them
-        let entityPaths = [];
-        if (entityMatches.length > 1) {
-            for (let i = 0; i < entityMatches.length - 1; i++) {
-                const paths = await this.graphTraversal.findWeightedPaths(
-                    entityMatches[i].text,
-                    entityMatches[i + 1].text
-                );
-                entityPaths.push(...paths);
+            if (!documentIds || documentIds.length === 0) {
+                return "Please select at least one document to search through.";
             }
+
+            // For now, only use text search (we'll add entity/graph features back later)
+            const searchResults = await this.llm.searchSimilarChunks(question, '', documentIds);
+
+            if (!searchResults || searchResults.length === 0) {
+                return "I couldn't find any relevant information in the selected documents to answer your question.";
+            }
+
+            // Keep using the existing formatContextForLLM for future extensibility
+            const formattedContext = this.formatContextForLLM([
+                {
+                    type: 'text',
+                    content: searchResults.map(r => r.content).join('\n\n'),
+                    normalizedScore: 1.0
+                }
+            ]);
+
+            // Generate the final answer
+            return await this.llm.generateAnswer(question, formattedContext);
+        } catch (error) {
+            console.error('Error in enhancedChat:', error);
+            return "I encountered an error while trying to process your question. Please try again.";
         }
-
-        // Merge all contexts with appropriate weights
-        const mergedContext = await this.graphTraversal.mergeContexts([
-            { results: vectorResults, weight: 0.3 },
-            { results: pathResults, weight: 0.2 },
-            { results: temporalResults, weight: 0.1 },
-            { results: reasoningResults, weight: 0.2 },
-            { results: entityContexts.flat(), weight: 0.1 },
-            { results: entityPaths, weight: 0.1 }
-        ]);
-
-        // Format context for the LLM
-        const formattedContext = this.formatContextForLLM(mergedContext);
-
-        // Generate the final answer
-        return this.llm.generateAnswer(question, formattedContext);
     }
 
-    async findEntitiesInQuestion(question) {
+    async findEntitiesInQuestion(question, documentFilter = '', documentIds = []) {
         const session = this.driver.session();
         try {
             const result = await session.run(`
-                MATCH (e:Entity)
-                WHERE toLower(e.text) IN [word IN split(toLower($question), ' ') | word]
-                   OR toLower($question) CONTAINS toLower(e.text)
+                MATCH (e:Entity)<-[:HAS_ENTITY]-(c:DocumentChunk)
+                WHERE (toLower(e.text) IN [word IN split(toLower($question), ' ') | word]
+                   OR toLower($question) CONTAINS toLower(e.text))
+                   ${documentFilter}
                 RETURN DISTINCT e
                 ORDER BY size(e.text) DESC
                 LIMIT 5
-            `, { question });
+            `, {
+                question,
+                documentIds
+            });
 
             return result.records.map(record => record.get('e').properties);
         } finally {

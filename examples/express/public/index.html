@@ -29,10 +29,9 @@
                     ></textarea>
                 </div>
             </div>
-            <div class="document-list" id="document-list" style="display: none;">
-                <h3>Current Document</h3>
-                <div id="documents"></div>
-                <button id="remove-document" onclick="handleReset()" style="display: none;">Remove Document</button>
+            <div class="document-list" id="document-list">
+                <h3>Available Documents</h3>
+                <div id="documents" class="documents-container"></div>
             </div>
             <div class="drop-zone" id="drop-zone">
                 <div class="icon" onclick="document.getElementById('pdf-upload').click()">📄</div>
@@ -91,47 +90,60 @@
         }
         .document-item {
             display: flex;
-            flex-direction: column;
+            align-items: center;
             padding: 0.75rem;
-            margin: 0.75rem 0;
+            margin: 0.5rem 0;
             background: white;
             border-radius: 8px;
             border: 1px solid #e9ecef;
-            cursor: pointer;
             transition: all 0.2s;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+            gap: 0.75rem;
         }
         .document-item:hover {
-            transform: translateY(-1px);
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-        }
-        .document-item.active {
-            border-color: #007bff;
             background: #f8f9ff;
         }
-        .document-header {
-            display: flex;
-            align-items: center;
-            width: 100%;
-            margin-bottom: 0.75rem;
+        .document-checkbox {
+            margin: 0;
+            width: 18px;
+            height: 18px;
+            cursor: pointer;
         }
-        .document-item .icon {
-            margin-right: 0.75rem;
-            font-size: 1.2rem;
-            color: #6c757d;
-        }
-        .document-item .name {
+        .document-info {
             flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 0.25rem;
+        }
+        .document-name {
             font-weight: 500;
             color: #2c3e50;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
+            word-break: break-word;
         }
-        .document-item .date {
+        .document-date {
             font-size: 0.85rem;
             color: #6c757d;
-            margin-left: 1rem;
+        }
+        .document-status {
+            font-size: 0.85rem;
+            color: #28a745;
+            display: flex;
+            align-items: center;
+            gap: 0.25rem;
+        }
+        .delete-btn {
+            padding: 0.5rem;
+            background: none;
+            border: none;
+            color: #dc2626;
+            cursor: pointer;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+        }
+        .delete-btn:hover {
+            background: #fee2e2;
         }
         .neo4j-query {
             border-top: 1px solid #e9ecef;
@@ -323,6 +335,11 @@
             font-size: 0.875rem;
             color: #b91c1c;
         }
+
+        .documents-container {
+            max-height: 300px;
+            overflow-y: auto;
+        }
     </style>
 
     <script>
@@ -406,27 +423,13 @@
                     console.log('Documents loaded:', data.documents);
                     documents.clear();
                     const documentsDiv = document.getElementById('documents');
-                    if (!documentsDiv) {
-                        console.error('Documents container not found');
-                        return;
-                    }
                     documentsDiv.innerHTML = '';
-
-                    if (data.documents.length === 0) {
-                        // Show the drop zone if no document
-                        document.getElementById('drop-zone').style.display = 'block';
-                        document.getElementById('document-list').style.display = 'none';
-                    } else {
-                        // Hide drop zone and show document list if we have a document
-                        document.getElementById('drop-zone').style.display = 'none';
-                        document.getElementById('document-list').style.display = 'block';
-                        
-                        // Only take the first document if there are multiple
-                        const doc = data.documents[0];
+                    
+                    // Add all documents to the list
+                    data.documents.forEach(doc => {
                         documents.set(doc.id, doc);
                         addDocumentToList(doc);
-                        selectDocument(doc.id);
-                    }
+                    });
 
                     // Update UI state
                     updateUIState();
@@ -444,7 +447,7 @@
                 return;
             }
 
-            const documentId = doc.id || doc.documentId;
+            const documentId = doc.id;
             if (!documentId) {
                 console.error('Document has no ID:', doc);
                 return;
@@ -455,35 +458,60 @@
             docElement.className = 'document-item';
             docElement.dataset.id = documentId;
             docElement.innerHTML = `
-                <div class="document-header">
-                    <span class="icon">📄</span>
-                    <span class="name">${doc.name || 'Untitled Document'}</span>
-                    <span class="date">${new Date(doc.uploadedAt || Date.now()).toLocaleDateString()}</span>
-                </div>
-                <div class="neo4j-query">
-                    <h4>Document Graph Query</h4>
-                    <textarea readonly onclick="this.select()">// Query to check document details
-MATCH (d:Document)
-WHERE d.documentId = '${documentId}' OR d.id = '${documentId}'
-OPTIONAL MATCH (d)-[:HAS_CHUNK]->(c:DocumentChunk)
-OPTIONAL MATCH (c)-[:HAS_ENTITY]->(e:Entity)
-RETURN d, c, e,
-       count(DISTINCT c) as total_chunks,
-       count(DISTINCT e) as total_entities,
-       collect(DISTINCT e.type) as entity_types;</textarea>
-                    <div class="neo4j-query-actions">
-                        <button onclick="event.stopPropagation(); copyQuery(this)" class="copy-btn tooltip" data-tooltip="Copy to clipboard">
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path>
-                                <rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect>
-                            </svg>
-                            Copy Query
-                        </button>
+                <input type="checkbox" class="document-checkbox" ${doc.selected ? 'checked' : ''}>
+                <div class="document-info">
+                    <div class="document-name">${doc.name || doc.id}</div>
+                    <div class="document-date">${new Date(doc.uploadedAt).toLocaleDateString()}</div>
+                    <div class="document-status">
+                        ${doc.isProcessed ? '✓ Processed' : '⏳ Processing...'}
                     </div>
                 </div>
+                <button class="delete-btn" onclick="deleteDocument('${documentId}')">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M3 6h18"></path>
+                        <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path>
+                        <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path>
+                    </svg>
+                </button>
             `;
-            docElement.onclick = () => selectDocument(documentId);
+
+            // Add checkbox event listener
+            const checkbox = docElement.querySelector('.document-checkbox');
+            checkbox.addEventListener('change', (e) => {
+                const doc = documents.get(documentId);
+                if (doc) {
+                    doc.selected = e.target.checked;
+                    updateUIState();
+                }
+            });
+
             documentsDiv.appendChild(docElement);
+        }
+
+        async function deleteDocument(documentId) {
+            if (!confirm('Are you sure you want to delete this document?')) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API_ENDPOINT}/documents/${documentId}`, {
+                    method: 'DELETE'
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Failed to delete document: ${response.status}`);
+                }
+
+                // Remove from UI and local storage
+                documents.delete(documentId);
+                document.querySelector(`[data-id="${documentId}"]`).remove();
+                
+                // Update UI state
+                updateUIState();
+            } catch (error) {
+                console.error('Error deleting document:', error);
+                showError('Failed to delete document: ' + error.message);
+            }
         }
 
         function selectDocument(docId) {
@@ -513,25 +541,24 @@ RETURN d, c, e,
         }
 
         function updateUIState() {
-            const hasDocument = documents.size > 0;
-            const dropZone = document.getElementById('drop-zone');
+            const hasDocuments = documents.size > 0;
+            const hasSelectedDocuments = Array.from(documents.values()).some(doc => doc.selected);
             const documentList = document.getElementById('document-list');
-            const documentsContainer = document.getElementById('documents');
+            const userInput = document.getElementById('user-input');
+            const micButton = document.getElementById('mic-button');
 
-            console.log('Updating UI state, has document:', hasDocument);
+            // Show document list if we have documents
+            documentList.style.display = hasDocuments ? 'block' : 'none';
 
-            if (hasDocument) {
-                dropZone.style.display = 'none';
-                documentList.style.display = 'block';
-                documentsContainer.style.display = 'block';
+            // Enable/disable chat based on document selection
+            userInput.disabled = !hasSelectedDocuments;
+            micButton.disabled = !hasSelectedDocuments;
+            
+            if (!hasSelectedDocuments) {
+                userInput.placeholder = 'Please select at least one document to chat...';
             } else {
-                dropZone.style.display = 'block';
-                documentList.style.display = 'none';
-                documentsContainer.style.display = 'none';
+                userInput.placeholder = 'Ask a question about your selected documents...';
             }
-
-            // Enable/disable chat based on document
-            disableChat(!hasDocument);
         }
 
         function updateSubmitButtonState() {
@@ -555,7 +582,7 @@ RETURN d, c, e,
             dropZone.querySelector('p').textContent = `Selected: ${file.name}`;
         }
 
-        // New submit handler
+        // Modified handleSubmit
         async function handleSubmit() {
             const scenarioDescription = document.getElementById('scenario-description').value.trim();
             
@@ -571,9 +598,7 @@ RETURN d, c, e,
 
             // Show loading state and hide any previous error
             document.getElementById('upload-loading').classList.add('active');
-            document.getElementById('drop-zone').classList.add('hidden');
             hideError();
-            disableChat(true);
 
             try {
                 // Send both file and scenario description in one request
@@ -594,29 +619,28 @@ RETURN d, c, e,
                     const documentData = {
                         id: data.documentId,
                         name: selectedFile.name,
-                        uploadedAt: new Date().toISOString()
+                        uploadedAt: new Date().toISOString(),
+                        selected: true
                     };
 
-                    // Add new document to list and select it
+                    // Add new document to list
                     documents.set(documentData.id, documentData);
                     addDocumentToList(documentData);
-                    selectDocument(documentData.id);
+                    
+                    // Reset upload form
+                    selectedFile = null;
+                    document.getElementById('scenario-description').value = '';
+                    document.getElementById('drop-zone').querySelector('p').textContent = 'Drop your PDF here';
+                    updateSubmitButtonState();
                     
                     // Update UI state
-                    document.getElementById('scenario-section').style.display = 'none';
-                    document.getElementById('document-list').style.display = 'block';
-                    document.getElementById('remove-document').style.display = 'block';
-                    document.getElementById('drop-zone').style.display = 'none';
-                    
-                    // Clear chat for the new document
-                    clearChat();
+                    updateUIState();
                 } else {
                     throw new Error(data.error || 'Failed to process PDF');
                 }
             } catch (error) {
                 console.error('Error uploading PDF:', error);
                 showError(error.message);
-                document.getElementById('drop-zone').classList.remove('hidden');
             } finally {
                 document.getElementById('upload-loading').classList.remove('active');
             }
@@ -685,11 +709,21 @@ RETURN d, c, e,
             return messageDiv;
         }
 
-        // Send Message Handler
+        // Modified sendMessage to include selected document IDs
         async function sendMessage() {
             const input = document.getElementById('user-input');
             const message = input.value.trim();
             if (!message) return;
+
+            // Get selected document IDs
+            const selectedDocIds = Array.from(documents.values())
+                .filter(doc => doc.selected)
+                .map(doc => doc.id);
+
+            if (selectedDocIds.length === 0) {
+                addMessageToChat('assistant', 'Please select at least one document to chat about.');
+                return;
+            }
 
             // Add user message to chat
             addMessageToChat('user', message);
@@ -704,7 +738,10 @@ RETURN d, c, e,
                     headers: {
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify({ question: message })
+                    body: JSON.stringify({ 
+                        question: message,
+                        documentIds: selectedDocIds
+                    })
                 });
 
                 if (!response.ok) {
@@ -714,29 +751,13 @@ RETURN d, c, e,
                 // Remove thinking message
                 thinkingMessage.remove();
                 
-                // Create new assistant message div
-                const messageDiv = document.createElement('div');
-                messageDiv.className = 'message assistant-message';
-                document.getElementById('chat-container').appendChild(messageDiv);
-
-                try {
-                    // Parse the response as JSON
-                    const data = await response.json();
-                    
-                    if (data.error) {
-                        messageDiv.innerHTML = marked.parse('Error: ' + data.error);
-                    } else if (data.answer) {
-                        messageDiv.innerHTML = marked.parse(data.answer);
-                    } else {
-                        messageDiv.innerHTML = marked.parse('No answer found.');
-                    }
-                    
-                    // Scroll to bottom
-                    const chatContainer = document.getElementById('chat-container');
-                    chatContainer.scrollTop = chatContainer.scrollHeight;
-                } catch (e) {
-                    console.error('Error parsing response:', e);
-                    messageDiv.innerHTML = marked.parse('Error parsing response from server.');
+                const data = await response.json();
+                if (data.error) {
+                    addMessageToChat('assistant', 'Error: ' + data.error);
+                } else if (data.answer) {
+                    addMessageToChat('assistant', data.answer);
+                } else {
+                    addMessageToChat('assistant', 'No answer found.');
                 }
             } catch (error) {
                 console.error('Error sending message:', error);

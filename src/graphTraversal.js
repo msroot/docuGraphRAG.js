@@ -54,12 +54,14 @@ export class GraphTraversalService {
     }
   }
 
-  async findPathBasedContext(question, maxHops = 3) {
+  async findPathBasedContext(question, maxHops = 3, documentFilter = '', documentIds = []) {
     const session = this.driver.session();
     try {
       const result = await session.run(`
-                MATCH path = (start:DocumentChunk)-[*1..${maxHops}]-(related:DocumentChunk)
-                WHERE start.content CONTAINS $searchTerm
+                MATCH (start:DocumentChunk)
+                WHERE start.content CONTAINS $searchTerm ${documentFilter}
+                MATCH path = (start)-[*1..${maxHops}]-(related:DocumentChunk)
+                WHERE related.content CONTAINS $searchTerm ${documentFilter}
                 WITH path, relationships(path) as rels,
                      reduce(weight = 1.0, r in relationships(path) | 
                             weight * CASE type(r)
@@ -71,7 +73,10 @@ export class GraphTraversalService {
                 RETURN path, pathRelevance
                 ORDER BY pathRelevance DESC
                 LIMIT 5
-            `, { searchTerm: question });
+            `, {
+        searchTerm: question,
+        documentIds
+      });
 
       return result.records.map(record => ({
         path: record.get('path'),
@@ -171,14 +176,15 @@ export class GraphTraversalService {
     }
   }
 
-  async findTemporalContext(targetDate, windowDays = 7) {
+  async findTemporalContext(targetDate, windowDays = 7, documentFilter = '', documentIds = []) {
     const session = this.driver.session();
     try {
       const result = await session.run(`
                 MATCH (d:Document)-[:HAS_CHUNK]->(c:DocumentChunk)-[:HAS_ENTITY]->(e:Entity)
-                WHERE e.type = 'DATE' AND 
-                      datetime(e.value) >= datetime($targetDate) - duration({days: $windowDays}) AND
-                      datetime(e.value) <= datetime($targetDate) + duration({days: $windowDays})
+                WHERE e.type = 'DATE' 
+                    AND datetime(e.value) >= datetime($targetDate) - duration({days: $windowDays})
+                    AND datetime(e.value) <= datetime($targetDate) + duration({days: $windowDays})
+                    ${documentFilter}
                 WITH c, e, abs(duration.between(datetime(e.value), datetime($targetDate)).days) as dayDiff
                 ORDER BY dayDiff
                 WITH c, e, dayDiff, 
@@ -191,7 +197,8 @@ export class GraphTraversalService {
                 LIMIT 10
             `, {
         targetDate: targetDate.toISOString(),
-        windowDays
+        windowDays,
+        documentIds
       });
 
       return result.records.map(record => ({
@@ -205,32 +212,36 @@ export class GraphTraversalService {
     }
   }
 
-  async expandEntityContext(entityName, maxDepth = 2) {
+  async expandEntityContext(entityName, maxDepth = 2, documentFilter = '', documentIds = []) {
     const session = this.driver.session();
     try {
       const result = await session.run(`
-                MATCH (source:Entity {text: $entityName})
+                MATCH (source:Entity {text: $entityName})<-[:HAS_ENTITY]-(c:DocumentChunk)
+                WHERE 1=1 ${documentFilter}
+                WITH source
                 CALL apoc.path.subgraphNodes(source, {
                     relationshipFilter: "RELATES_TO|REFERENCES|APPEARS_WITH",
                     minLevel: 1,
                     maxLevel: $maxDepth
                 })
-                YIELD node
-                WITH node, 
+                YIELD node, path
+                WITH node, length(path) as pathLength,
                      CASE
                          WHEN node:Entity THEN 1.0
                          ELSE 0.8
                      END as baseScore
                 MATCH (node)<-[:HAS_ENTITY]-(chunk:DocumentChunk)
+                WHERE 1=1 ${documentFilter}
                 WITH node, chunk, baseScore,
-                     baseScore * pow($weightDecay, length(path)) as score
+                     baseScore * pow($weightDecay, pathLength) as score
                 RETURN node, chunk, score
                 ORDER BY score DESC
                 LIMIT 15
             `, {
         entityName,
         maxDepth,
-        weightDecay: this.config.weightDecay
+        weightDecay: this.config.weightDecay,
+        documentIds
       });
 
       return result.records.map(record => ({
@@ -243,13 +254,17 @@ export class GraphTraversalService {
     }
   }
 
-  async findWeightedPaths(startEntity, endEntity) {
+  async findWeightedPaths(startEntity, endEntity, documentFilter = '', documentIds = []) {
     const session = this.driver.session();
     try {
       const result = await session.run(`
-                MATCH path = shortestPath(
-                    (start:Entity {text: $startEntity})-[*..5]-(end:Entity {text: $endEntity})
-                )
+                MATCH (start:Entity {text: $startEntity})<-[:HAS_ENTITY]-(c1:DocumentChunk)
+                WHERE 1=1 ${documentFilter}
+                WITH start
+                MATCH (end:Entity {text: $endEntity})<-[:HAS_ENTITY]-(c2:DocumentChunk)
+                WHERE 1=1 ${documentFilter}
+                WITH start, end
+                MATCH path = shortestPath((start)-[*..5]-(end))
                 WITH path,
                      reduce(weight = 1.0, r in relationships(path) |
                         weight * CASE 
@@ -265,7 +280,11 @@ export class GraphTraversalService {
                        relTypes,
                        length(path) as pathLength
                 ORDER BY pathStrength DESC
-            `, { startEntity, endEntity });
+            `, {
+        startEntity,
+        endEntity,
+        documentIds
+      });
 
       return result.records.map(record => ({
         path: record.get('path'),
@@ -279,14 +298,30 @@ export class GraphTraversalService {
     }
   }
 
-  async mergeContexts(results) {
+  async mergeContexts(contexts) {
+    if (!Array.isArray(contexts)) {
+      console.warn('mergeContexts received non-array input:', contexts);
+      return [];
+    }
+
     // Combine and normalize results from different algorithms
-    const combinedResults = results.flatMap(({ results, weight }) =>
-      results.map(result => ({
+    const combinedResults = contexts.flatMap(({ results, weight }) => {
+      // Handle case where results is a query object
+      if (results && typeof results === 'object' && results.query) {
+        console.warn('Received query object instead of results array:', { weight });
+        return [];
+      }
+
+      if (!results || !Array.isArray(results)) {
+        console.warn('Invalid results in context:', { results, weight });
+        return [];
+      }
+
+      return results.map(result => ({
         ...result,
-        normalizedScore: result.relevance * weight
-      }))
-    );
+        normalizedScore: (result.relevance || result.similarity || 0) * (weight || 0)
+      }));
+    });
 
     // Sort by normalized score and remove duplicates
     return combinedResults

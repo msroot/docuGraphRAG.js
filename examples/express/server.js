@@ -59,13 +59,27 @@ app.get('/documents', async (req, res) => {
     try {
         const result = await session.run(
             `MATCH (d:Document) 
-             RETURN d`
+             OPTIONAL MATCH (d)-[:HAS_CHUNK]->(c:DocumentChunk)
+             WITH d, count(c) as chunkCount
+             RETURN {
+                 id: d.documentId,
+                 name: d.name,
+                 uploadedAt: d.created,
+                 isProcessed: chunkCount > 0,
+                 selected: true
+             } as document`
         );
-        const documents = result.records.map(record => record.get('d').properties);
-        res.json(documents);
+        const documents = result.records.map(record => record.get('document'));
+        res.json({
+            success: true,
+            documents: documents
+        });
     } catch (error) {
         console.error('Error fetching documents:', error);
-        res.status(500).json({ error: 'Error fetching documents' });
+        res.status(500).json({
+            success: false,
+            error: 'Error fetching documents'
+        });
     } finally {
         await session.close();
     }
@@ -95,24 +109,28 @@ app.post('/upload', upload.single('pdf'), async (req, res) => {
             scenarioDescription
         });
 
-        // Convert scenarioDescription to string and ensure it's not [object Object]
-        const scenarioString = String(scenarioDescription);
-        if (scenarioString === '[object Object]') {
-            return res.status(400).json({
-                success: false,
-                error: 'Invalid scenario description format'
-            });
-        }
-
         // Extract text from PDF using pdf-parse
         const pdfData = await pdfParse(req.file.buffer);
         const fullText = pdfData.text;
 
         // Process the extracted text
         const result = await docurag.processDocument(fullText, scenarioString);
+
+        // Update document name in Neo4j
+        const session = driver.session();
+        try {
+            await session.run(
+                'MATCH (d:Document {documentId: $documentId}) SET d.name = $name',
+                { documentId: result.documentId, name: req.file.originalname }
+            );
+        } finally {
+            await session.close();
+        }
+
         res.json({
             success: true,
-            documentId: result.documentId
+            documentId: result.documentId,
+            name: req.file.originalname
         });
     } catch (error) {
         console.error('Error handling document:', error);
@@ -124,27 +142,25 @@ app.post('/upload', upload.single('pdf'), async (req, res) => {
 });
 
 app.post('/chat', async (req, res) => {
+    const { question, documentIds } = req.body;
+    console.log('Chat request:', { question, documentIds });
+
+    if (!question) {
+        return res.json({ success: false, error: 'Question is required' });
+    }
+
+    if (!documentIds || !Array.isArray(documentIds) || documentIds.length === 0) {
+        return res.json({ success: false, error: 'At least one document must be selected' });
+    }
+
     try {
-        // Accept either 'question' or 'message' from the request body
-        const { question, message } = req.body;
-        const userQuery = question || message;
-
-        console.log('Chat request:', { userQuery, originalBody: req.body });
-
-        if (!userQuery) {
-            return res.status(400).json({
-                success: false,
-                error: 'Question is required. Please provide either a "question" or "message" field in your request.'
-            });
-        }
-
-        const result = await docurag.chat(userQuery);
-        res.json(result);
+        const answer = await docurag.enhancedChat(question, { documentIds });
+        res.json({ success: true, answer });
     } catch (error) {
         console.error('Error handling chat:', error);
         res.status(500).json({
             success: false,
-            error: error.message || 'An unexpected error occurred with your request.'
+            error: 'An error occurred while processing your question. Please try again.'
         });
     }
 });
@@ -177,6 +193,35 @@ app.post('/generateSchema', async (req, res) => {
         success: false,
         error: 'This endpoint is deprecated. Please include scenario description with document upload.'
     });
+});
+
+// Add delete document endpoint
+app.delete('/documents/:documentId', async (req, res) => {
+    const session = driver.session();
+    try {
+        const { documentId } = req.params;
+
+        // Delete document and all related nodes
+        await session.run(`
+            MATCH (d:Document {documentId: $documentId})
+            OPTIONAL MATCH (d)-[:HAS_CHUNK]->(c:DocumentChunk)
+            OPTIONAL MATCH (c)-[:HAS_ENTITY]->(e:Entity)
+            DETACH DELETE d, c, e
+        `, { documentId });
+
+        res.json({
+            success: true,
+            message: 'Document deleted successfully'
+        });
+    } catch (error) {
+        console.error('Error deleting document:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message || 'Failed to delete document'
+        });
+    } finally {
+        await session.close();
+    }
 });
 
 // Start server with proper error handling

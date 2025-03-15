@@ -71,10 +71,9 @@ IMPORTANT:
             const response = await this.openai.chat.completions.create({
                 model: "gpt-4",
                 messages,
-                // temperature: this.config.temperature,
-
-                // stream: options.stream ?? false,
-                // ...options
+                temperature: this.config.temperature,
+                stream: options.stream ?? false,
+                ...options
             });
             return response;
         } catch (error) {
@@ -385,124 +384,51 @@ Provide a clear and concise answer based ONLY on the information provided in the
     }
 
     // Add a method to search using vector similarity
-    async searchSimilarChunks(question, documentId = null, topK = 5) {
+    async searchSimilarChunks(searchTerms, documentFilter = '', documentIds = []) {
+        const session = this.driver.session();
         try {
-            // Get the vector embedding for the question
-            const embeddingResponse = await this.openai.embeddings.create({
-                model: "text-embedding-3-small",
-                input: question,
-                encoding_format: "float"
-            });
-
-            const questionEmbedding = embeddingResponse.data[0].embedding;
-
-            // Create a full-text search pattern
-            // Remove special characters and add fuzzy matching
-            const searchTerms = question
-                .replace(/[^\w\s]/g, ' ')
-                .split(/\s+/)
-                .filter(term => term.length > 2)
-                .map(term => `${term}~`)
-                .join(' OR ');
-
-            // Construct the Cypher query using manual cosine similarity calculation
-            const query = documentId ? `
-                // Match document chunks for the specific document
-                MATCH (d:Document {documentId: $documentId})-[:HAS_CHUNK]->(c:DocumentChunk)
-                WHERE c.embedding IS NOT NULL
-                
-                // Calculate cosine similarity manually
-                WITH c, 
-                     reduce(dot = 0.0, i in range(0, size(c.embedding)-1) | 
-                         dot + c.embedding[i] * $questionEmbedding[i]
-                     ) / (
-                         sqrt(reduce(l2 = 0.0, i in range(0, size(c.embedding)-1) | 
-                             l2 + c.embedding[i] * c.embedding[i]
-                         )) * 
-                         sqrt(reduce(l2 = 0.0, i in range(0, size($questionEmbedding)-1) | 
-                             l2 + $questionEmbedding[i] * $questionEmbedding[i]
-                         ))
-                     ) as vectorScore
-                
-                // Perform full-text search on content if terms exist
-                WITH c, vectorScore,
-                     apoc.text.fuzzyMatch(c.content, $searchTerms) as textScore
-                
-                // Combine scores
-                WITH c, 
-                     CASE 
-                         WHEN vectorScore IS NULL THEN 0 
-                         ELSE vectorScore 
-                     END * 0.6 + 
-                     CASE 
-                         WHEN textScore > 0 THEN textScore 
-                         ELSE 0 
-                     END * 0.4 as combinedScore
-                
-                // Order by combined score and limit results
-                WHERE combinedScore > 0
-                ORDER BY combinedScore DESC
-                LIMIT $topK
-                
-                RETURN 
-                    c.content as content,
-                    c.documentId as documentId,
-                    combinedScore as similarity
-            ` : `
-                // Match all document chunks
-                MATCH (d:Document)-[:HAS_CHUNK]->(c:DocumentChunk)
-                WHERE c.embedding IS NOT NULL
-                
-                // Calculate cosine similarity manually
-                WITH c, 
-                     reduce(dot = 0.0, i in range(0, size(c.embedding)-1) | 
-                         dot + c.embedding[i] * $questionEmbedding[i]
-                     ) / (
-                         sqrt(reduce(l2 = 0.0, i in range(0, size(c.embedding)-1) | 
-                             l2 + c.embedding[i] * c.embedding[i]
-                         )) * 
-                         sqrt(reduce(l2 = 0.0, i in range(0, size($questionEmbedding)-1) | 
-                             l2 + $questionEmbedding[i] * $questionEmbedding[i]
-                         ))
-                     ) as vectorScore
-                
-                // Perform full-text search on content if terms exist
-                WITH c, vectorScore,
-                     apoc.text.fuzzyMatch(c.content, $searchTerms) as textScore
-                
-                // Combine scores
-                WITH c, 
-                     CASE 
-                         WHEN vectorScore IS NULL THEN 0 
-                         ELSE vectorScore 
-                     END * 0.6 + 
-                     CASE 
-                         WHEN textScore > 0 THEN textScore 
-                         ELSE 0 
-                     END * 0.4 as combinedScore
-                
-                // Order by combined score and limit results
-                WHERE combinedScore > 0
-                ORDER BY combinedScore DESC
-                LIMIT $topK
-                
-                RETURN 
-                    c.content as content,
-                    c.documentId as documentId,
-                    combinedScore as similarity
+            // Simple text-based search
+            const query = `
+                MATCH (c:DocumentChunk)
+                WHERE c.documentId IN $documentIds
+                AND toLower(c.content) CONTAINS toLower($searchTerms)
+                RETURN c.content AS content, c.documentId AS documentId, 1.0 as relevance
+                LIMIT toInteger(5)
             `;
 
-            const params = {
-                questionEmbedding,
-                documentId,
-                topK,
-                searchTerms
-            };
+            const result = await session.run(query, {
+                searchTerms,
+                documentIds: documentIds
+            });
 
-            return { query, params };
+            if (!result.records || result.records.length === 0) {
+                // If no exact matches, return first few chunks
+                const fallbackQuery = `
+                    MATCH (c:DocumentChunk)
+                    WHERE c.documentId IN $documentIds
+                    RETURN c.content AS content, c.documentId AS documentId, 0.1 as relevance
+                    ORDER BY c.chunkIndex
+                    LIMIT toInteger(5)
+                `;
+
+                const fallbackResult = await session.run(fallbackQuery, { documentIds });
+                return fallbackResult.records.map(record => ({
+                    content: record.get('content'),
+                    documentId: record.get('documentId'),
+                    relevance: record.get('relevance') || 0
+                }));
+            }
+
+            return result.records.map(record => ({
+                content: record.get('content'),
+                documentId: record.get('documentId'),
+                relevance: record.get('relevance') || 0
+            }));
         } catch (error) {
             console.error('Error in searchSimilarChunks:', error);
-            throw error;
+            return [];
+        } finally {
+            await session.close();
         }
     }
 
