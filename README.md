@@ -1,204 +1,182 @@
+<!-- SystemaAI SophiaAI Delphi-->
+
+
 # 🚀 docuGraphRAG.js [WIP]
 
-A document processing and RAG (Retrieval-Augmented Generation) library that converts documents into knowledge graphs. Uses graph databases for context retrieval and enables document interaction through local LLMs.
+A powerful document analysis tool that combines vector embeddings, graph databases, and language models to create an intelligent document processing and querying system.
 
-> ⚠️ **Note**: This project is intended for research and experimental purposes only. It serves as a demonstration of RAG (Retrieval-Augmented Generation) concepts and graph-based document processing techniques.
+## Features 🌟
 
-## 📖 Project Evolution
+### 1. Hybrid Search System
+Our unique three-layer search approach combines:
+- **Semantic Search** (60% weight): Uses OpenAI embeddings to understand meaning and context
+- **Full-Text Search** (40% weight): Handles exact matches and fuzzy text search
+- **Graph Structure**: Leverages relationships between entities for context-aware results
 
-docuGraphRAG.js builds upon [docuRAG.js](https://github.com/msroot/docuRAG.js/) with a focus on graph-based document representation:
+### 2. Advanced Graph Traversal 🔍
+- **Path-Based Context**: Finds relevant information through relationship paths
+- **Semantic Subgraphs**: Explores connected information clusters
+- **Knowledge Reasoning**: Performs multi-hop inference across entities
+- **Temporal Analysis**: Discovers time-related connections
+- **Entity Expansion**: Broadens context through related entities
+- **Weighted Paths**: Identifies strongest connection routes
 
-- **docuRAG.js**: Uses Qdrant vector database for similarity search
-- **docuGraphRAG.js**: Uses Neo4j graph database for relationship modeling
+### 3. Intelligent Entity Extraction
+- Automatically identifies entities (People, Organizations, Locations, etc.)
+- Creates relationships between entities
+- Maintains entity properties and metadata
+- Graceful fallback to vector search if entity extraction fails
 
-Key improvements:
-- Pattern-based querying
-- Explicit relationship modeling
-- Multi-hop reasoning
-- Relationship metadata preservation
+### 4. Vector Embeddings
+- Uses OpenAI's text-embedding-3-small model
+- Stores embeddings alongside content for semantic search
+- Enables finding similar content even without exact keyword matches
 
-## ✨ Features
+### 5. Graph Database Integration
+- Stores documents as connected chunks
+- Maintains relationships between entities
+- Enables complex graph queries
+- Uses Neo4j for efficient graph operations
 
-- 📄 Document chunking and processing
-- 🔍 SpaCy-based entity extraction
-- 📊 Neo4j graph representation
-- 🤖 Ollama LLM integration
-- 🎯 Semantic search
-- 📡 Response streaming
-- 🔄 Relationship inference
-- 🎨 Neo4j Browser visualization
+## Getting Started 🏁
 
-## 🛠️ Prerequisites
-
-- Docker & Docker Compose
-- Node.js 18+
-- 8GB free disk space (Mistral model: 4GB)
-- Minimum 10GB RAM available for Ollama service (using Mistral model)
-
-## 🚀 Quick Start
-
-1. Clone and enter directory:
+### Prerequisites
 ```bash
-git clone https://github.com/msroot/docuGraphRAG.js.git
-cd docuGraphRAG.js
-```
-
-2. Start services:
-```bash
-docker-compose up -d
-```
-> ⚠️ First run downloads Mistral model (~4GB)
-
-3. Install dependencies:
-```bash
+# Install Node.js dependencies
 npm install
+
+# Set up environment variables
+cp .env.example .env
+# Edit .env with your API keys and configuration
 ```
 
-## 🌐 Services
+### Configuration
+```javascript
+{
+    apiKey: process.env.OPENAI_API_KEY,
+    model: 'gpt-4',  // or any other OpenAI model
+    neo4jUrl: process.env.NEO4J_URL,
+    neo4jUser: process.env.NEO4J_USER,
+    neo4jPassword: process.env.NEO4J_PASSWORD,
+    // Graph traversal settings
+    maxHops: 3,
+    temporalWindow: 7,
+    minConfidence: 0.6,
+    weightDecay: 0.8
+}
+```
 
-- Neo4j: http://localhost:7474 (neo4j/password)
-- SpaCy: http://localhost:8080
-- Ollama: http://localhost:11434
-
-## 💻 Usage
-
+### Basic Usage
 ```javascript
 import { DocuGraphRAG } from 'docugraphrag';
 
 // Initialize
-const rag = new DocuGraphRAG({
-  neo4jUrl: 'bolt://localhost:7687',
-  neo4jUser: 'neo4j',
-  neo4jPassword: 'password',
-  debug: true
-});
-
+const rag = new DocuGraphRAG(config);
 await rag.initialize();
 
-// Process document
-const buffer = fs.readFileSync('document.pdf');
-const result = await rag.processDocument(buffer, 'document.pdf');
+// Process a document
+const result = await rag.processDocument(text, "Analysis focus description");
 
-// Query document
-const response = await rag.chat('What is the main topic?');
-console.log(response.answer);
+// Enhanced chat with advanced context gathering
+const answer = await rag.chat("Who is Dr. Sarah Jones?", { documentId: "doc123" });
 ```
 
-## 🏗️ Architecture
+## How It Works 🔍
 
-The system processes documents through five main stages:
+### 1. Document Processing
+- Splits documents into manageable chunks
+- Generates vector embeddings for each chunk
+- Extracts entities and relationships
+- Stores everything in Neo4j with proper indexing
 
-1. Document Processing: Text extraction and semantic chunking
-2. Entity Analysis: NLP-based entity and relationship extraction via SpaCy
-3. Graph Construction: Building Neo4j graph from entities and relationships
-4. Context Retrieval: Query-based graph traversal for relevant segments
-5. Response Generation: LLM-powered answer synthesis from retrieved context
+### 2. Advanced Search Process
+When you ask a question:
+1. Converts question to vector embedding
+2. Performs fuzzy full-text search
+3. Identifies relevant entities in the question
+4. Explores multiple context gathering strategies:
+   - Vector similarity (30% weight)
+   - Path-based context (20% weight)
+   - Temporal relationships (10% weight)
+   - Knowledge reasoning (20% weight)
+   - Entity context (10% weight)
+   - Entity relationships (10% weight)
+5. Merges and ranks all contexts
+6. Generates comprehensive answer using GPT-4
 
-```mermaid
-graph TD
-    PDF[Document Input<br/>PDF/Text] --> Parser[Document Parser]
-    Parser --> Chunks[Text Chunks]
-    Chunks --> NLP[SpaCy NLP Engine]
-    
-    NLP --> |Extract Entities| Entities[Named Entities<br/>People, Places, Dates]
-    NLP --> |Extract Relations| Relations[Entity Relations<br/>Links & Connections]
-    
-    Entities --> Graph[Knowledge Graph Builder]
-    Relations --> Graph
-    Graph --> Neo4j[Neo4j Graph Database<br/>Nodes & Relationships]
-    
-    Question[User Question] --> Generator[AI Query Generator]
-    Generator --> |Dynamic Graph Query| Neo4j
-    Neo4j --> |Graph Traversal| Context[Relevant Context]
-    Context --> Answer[AI Answer Generation<br/>Local LLM]
-    Answer --> Response[Response to User]
+### 3. Graph Traversal Algorithms
+- **Path Finding**: Discovers connections between concepts
+- **Semantic Clustering**: Groups related information
+- **Temporal Analysis**: Tracks time-based relationships
+- **Entity Expansion**: Broadens contextual understanding
+- **Weighted Relationships**: Prioritizes stronger connections
 
-    style PDF fill:#f9d,stroke:#333
-    style Question fill:#9df,stroke:#333
-    style Response fill:#9f9,stroke:#333
-    style NLP fill:#fcf,stroke:#333
-    style Neo4j fill:#ffc,stroke:#333
-    style Generator fill:#fcf,stroke:#333
-    style Answer fill:#fcf,stroke:#333
-    style Parser fill:#fcf,stroke:#333
-    style Entities fill:#fcf,stroke:#333
-    style Relations fill:#fcf,stroke:#333
-    style Graph fill:#fcf,stroke:#333
-    style Context fill:#ffc,stroke:#333
-    style Chunks fill:#f9d,stroke:#333
+### 4. Data Structure
+```cypher
+(Document)-[:HAS_CHUNK]->(DocumentChunk)
+(DocumentChunk)-[:HAS_ENTITY]->(Entity)
+(Entity)-[:RELATES_TO {type: "..."}]->(Entity)
 ```
 
-## ⚙️ Configuration
+## Advanced Features 🔧
 
-| Option | Description | Default |
-|--------|-------------|---------|
-| neo4jUrl | Neo4j URL | bolt://localhost:7687 |
-| neo4jUser | Neo4j username | neo4j |
-| neo4jPassword | Neo4j password | password |
-| spacyApiUrl | SpaCy endpoint | http://localhost:8080 |
-| ollamaApiUrl | Ollama endpoint | http://localhost:11434/api/generate |
-| chunkSize | Document chunk size | 1000 |
-| chunkOverlap | Chunk overlap | 200 |
-| searchLimit | Max results | 3 |
-| debug | Debug mode | false |
+### Custom Indexes
+- Full-text search index on document content
+- Vector index for similarity search
+- Regular indexes for common lookups
+- Entity text and type indexing
+- Temporal index for date-based queries
 
-## 🔧 Troubleshooting
+### Graph Algorithms
+- Breadth-first search for relationship exploration
+- Shortest path finding between entities
+- Semantic subgraph analysis
+- Multi-hop reasoning
+- Temporal pattern recognition
 
-1. **Neo4j**
-   - Check container: `docker ps`
-   - View logs: `docker logs neo4j`
-   - Verify config
+### Fallback Mechanisms
+- Continues processing even if entity extraction fails
+- Maintains vector search capabilities
+- Tracks chunks with/without entities using `hasEntities` flag
+- Graceful degradation of search strategies
 
-2. **SpaCy**
-   - Check container: `docker ps`
-   - View logs: `docker logs spacyapi`
+## API Reference 📚
 
-3. **Ollama**
-   - Check model: `docker logs ollama`
-   - Test API: `curl http://localhost:11434/api/generate`
-   - Memory Issues:
-     - Error "model requires more system memory than is available": The Mistral model requires 10.8GB of system memory
-     - Common symptoms:
-       - Available memory: System shows only ~1.1GB available when 4.8GB is needed
-       - Logs show: "model request too large for system"
-       - No GPU detected: "no compatible GPUs were discovered"
-     - Solutions:
-       1. Increase system resources:
-          - Ensure your system has at least 6GB total RAM (4.8GB for model + overhead)
-          - In Docker Desktop: Increase memory allocation to at least 5GB
-          - Check swap space availability (recommended: at least 1GB)
-     - Best Practices:
-       - Monitor system resources: `docker stats`
-       - Check logs for memory warnings: `docker logs ollama`
-       - Consider GPU support for better performance
+### Core Methods
+- `processDocument(text, analysisDescription)`
+- `chat(question, options)`
+- `enhancedChat(question, options)`
+- `findPathBasedContext(question, maxHops)`
+- `exploreSemanticSubgraph(startNodeId)`
+- `performKnowledgeReasoning(question, embedding)`
+- `findTemporalContext(date, windowDays)`
+- `expandEntityContext(entityName, maxDepth)`
+- `findWeightedPaths(startEntity, endEntity)`
 
-## 📚 Examples
+### Search Parameters
+- Vector similarity weight: 0.3
+- Path-based weight: 0.2
+- Temporal weight: 0.1
+- Reasoning weight: 0.2
+- Entity context weight: 0.1
+- Relationship weight: 0.1
+- Default top K results: 5
+- Fuzzy matching enabled for text search
 
-See `examples/` for:
-- Express integration
-- Document processing
-- Query patterns
-- Entity extraction
+## Contributing 🤝
 
-## 🤝 Contributing
+We welcome contributions! Please check our contributing guidelines for more information.
 
-Submit Pull Requests for:
-- Bug fixes
-- New features
-- Documentation
-- Tests
+## License 📄
 
-## 📝 License
+MIT License - feel free to use in your own projects!
 
-MIT License - See [LICENSE](LICENSE)
+## Support 💬
 
-## 🙏 Acknowledgments
-
-Built with:
-- [Neo4j](https://neo4j.com/) - Graph Database
-- [SpaCy](https://spacy.io/) - NLP
-- [Ollama](https://ollama.ai/) - LLM
-- [Node.js](https://nodejs.org/) - Runtime
+- Create an issue for bug reports
+- Start a discussion for feature requests
+- Check our documentation for guides
 
 ---
-👨‍💻 🚀 ❤️ By [Yannis Kolovos](http://msroot.me)
+
+Built with ❤️ by [Yannis Kolovos](http://msroot.me/)

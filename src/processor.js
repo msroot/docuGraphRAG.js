@@ -1,6 +1,6 @@
 import pdfParse from 'pdf-parse';
 import { RecursiveCharacterTextSplitter } from 'langchain/text_splitter';
-import { v4 as uuidv4 } from 'uuid';
+import { Document } from 'langchain/document';
 
 export class Processor {
     constructor(config = {}) {
@@ -15,8 +15,7 @@ export class Processor {
 
         this.textSplitter = new RecursiveCharacterTextSplitter({
             chunkSize: this.config.chunkSize,
-            chunkOverlap: this.config.chunkOverlap,
-            lengthFunction: (text) => text.length,
+            chunkOverlap: this.config.chunkOverlap
         });
     }
 
@@ -46,26 +45,36 @@ export class Processor {
             }
 
             const text = await this.extractTextFromPDF(buffer);
-            const chunks = await this.textSplitter.splitText(text);
-            const documentId = uuidv4();
 
-            const processedChunks = chunks.map((chunk, index) => ({
-                text: chunk,
-                chunkIndex: index,
-                documentId
+            // Create a LangChain Document with basic metadata
+            const doc = new Document({
+                pageContent: text,
+                metadata: {
+                    source: fileName,
+                    type: 'pdf',
+                    created: new Date().toISOString()
+                }
+            });
+
+            // Use LangChain's built-in document splitting
+            const docs = await this.textSplitter.splitDocuments([doc]);
+
+            // Simplify chunks to avoid nested objects
+            const simplifiedChunks = docs.map(doc => ({
+                pageContent: doc.pageContent,
+                source: doc.metadata.source,
+                type: doc.metadata.type,
+                created: doc.metadata.created
             }));
 
-            const metadata = {
-                documentId,
-                fileName,
-                fileType: 'pdf',
-                uploadDate: new Date().toISOString(),
-                totalChunks: processedChunks.length
-            };
-
             return {
-                metadata,
-                chunks: processedChunks
+                metadata: {
+                    fileName,
+                    fileType: 'pdf',
+                    uploadDate: new Date().toISOString(),
+                    totalChunks: simplifiedChunks.length
+                },
+                chunks: simplifiedChunks
             };
         } catch (error) {
             console.error('[Processor] Error processing document:', error);

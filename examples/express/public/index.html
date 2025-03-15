@@ -18,22 +18,34 @@
     
     <main class="container">
         <div class="sidebar">
-            <div class="document-list" id="document-list">
+            <div id="scenario-section" class="document-list">
+                <h3>Analysis Scenario</h3>
+                <div class="scenario-input">
+                    <textarea 
+                        id="scenario-description" 
+                        placeholder="Describe your analysis scenario (e.g., 'I want to analyze medical records to identify relationships between patients, doctors, treatments, and diagnoses. Track treatment dates, doctor specialties, and patient outcomes.')"
+                        rows="4"
+                        required
+                    ></textarea>
+                </div>
+            </div>
+            <div class="document-list" id="document-list" style="display: none;">
                 <h3>Current Document</h3>
                 <div id="documents"></div>
+                <button id="remove-document" onclick="handleReset()" style="display: none;">Remove Document</button>
             </div>
             <div class="drop-zone" id="drop-zone">
                 <div class="icon" onclick="document.getElementById('pdf-upload').click()">📄</div>
                 <p>Drop your PDF here</p>
                 <input type="file" id="pdf-upload" accept=".pdf" style="display: none;">
             </div>
+            <button id="submit-button" class="submit-button" onclick="handleSubmit()" disabled>Submit Document</button>
             <div class="loading" id="upload-loading">
                 <div class="simple-loader"></div>
                 <p>Uploading...</p>
             </div>
             <div class="error" id="upload-error"></div>
             <div id="pdf-preview"></div>
-            <button onclick="handleReset()">Remove Document</button>
         </div>
         
         <div class="main-content">
@@ -57,7 +69,7 @@
         <div class="footer-links">            
             <span>
                 <a href="https://qdrant.tech/" target="_blank" rel="noopener noreferrer">Qdrant Vector DB</a> • 
-                <a href="https://ollama.ai/" target="_blank" rel="noopener noreferrer">Ollama</a> • 
+                <a href="https://openai.com/" target="_blank" rel="noopener noreferrer">OpenAI</a> • 
                 <a href="https://ai.meta.com/llama/" target="_blank" rel="noopener noreferrer">Llama 2</a>
             </span>
         </div>
@@ -225,6 +237,92 @@
             50% { opacity: 0.4; }
             100% { opacity: 1; }
         }
+        .scenario-input {
+            margin-bottom: 1rem;
+        }
+        .scenario-input textarea {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid #e2e8f0;
+            border-radius: 0.375rem;
+            font-size: 0.875rem;
+            resize: vertical;
+            min-height: 80px;
+            font-family: inherit;
+        }
+        .scenario-input textarea:focus {
+            outline: none;
+            border-color: #4299e1;
+            box-shadow: 0 0 0 3px rgba(66, 153, 225, 0.1);
+        }
+        .submit-button {
+            margin-top: 1rem;
+            padding: 0.75rem 1.5rem;
+            background-color: #22c55e;
+            color: white;
+            border: none;
+            border-radius: 0.375rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background-color 0.2s;
+            width: 100%;
+        }
+        
+        .submit-button:hover {
+            background-color: #16a34a;
+        }
+        
+        .submit-button:disabled {
+            background-color: #cbd5e0;
+            cursor: not-allowed;
+        }
+
+        #remove-document {
+            margin-top: 1rem;
+            padding: 0.5rem 1rem;
+            background-color: #f56565;
+            color: white;
+            border: none;
+            border-radius: 0.375rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background-color 0.2s;
+            width: 100%;
+        }
+
+        #remove-document:hover {
+            background-color: #e53e3e;
+        }
+
+        .error {
+            display: none;
+            padding: 1rem;
+            margin: 1rem 0;
+            background-color: #fee2e2;
+            border: 1px solid #fecaca;
+            border-radius: 0.375rem;
+            color: #dc2626;
+        }
+
+        .error.active {
+            display: block;
+        }
+
+        .error-title {
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+        }
+
+        .error-message {
+            font-size: 0.875rem;
+            line-height: 1.25rem;
+        }
+
+        .error-action {
+            margin-top: 0.75rem;
+            font-size: 0.875rem;
+            color: #b91c1c;
+        }
     </style>
 
     <script>
@@ -234,6 +332,7 @@
         let currentSessionId = null;
         let currentDocumentId = null;
         let documents = new Map();
+        let selectedFile = null;
 
         // Load documents immediately when the script runs
         loadDocuments();
@@ -435,22 +534,39 @@ RETURN d, c, e,
             disableChat(!hasDocument);
         }
 
-        // Modified PDF Upload Handler
+        function updateSubmitButtonState() {
+            const scenarioDescription = document.getElementById('scenario-description').value.trim();
+            const submitButton = document.getElementById('submit-button');
+            submitButton.disabled = !scenarioDescription || !selectedFile;
+        }
+
+        // Modified handleFileUpload to not immediately upload
         async function handleFileUpload(file) {
             if (!file || file.type !== 'application/pdf') {
                 showError('Please upload a valid PDF file.');
                 return;
             }
 
-            // If there's already a document, confirm replacement
-            if (documents.size > 0) {
-                if (!confirm('This will replace your current document. Continue?')) {
-                    return;
-                }
-                // Clear existing document
-                await fetch(`${API_ENDPOINT}/cleanup`, { method: 'POST' });
-                documents.clear();
-                document.getElementById('documents').innerHTML = '';
+            selectedFile = file;
+            updateSubmitButtonState();
+
+            // Show file name in drop zone
+            const dropZone = document.getElementById('drop-zone');
+            dropZone.querySelector('p').textContent = `Selected: ${file.name}`;
+        }
+
+        // New submit handler
+        async function handleSubmit() {
+            const scenarioDescription = document.getElementById('scenario-description').value.trim();
+            
+            if (!scenarioDescription) {
+                showError('Please describe your analysis scenario before uploading a document.');
+                return;
+            }
+
+            if (!selectedFile) {
+                showError('Please select a PDF file.');
+                return;
             }
 
             // Show loading state and hide any previous error
@@ -460,8 +576,10 @@ RETURN d, c, e,
             disableChat(true);
 
             try {
+                // Send both file and scenario description in one request
                 const formData = new FormData();
-                formData.append('pdf', file);
+                formData.append('pdf', selectedFile);
+                formData.append('scenarioDescription', scenarioDescription);
 
                 const response = await fetch(`${API_ENDPOINT}/upload`, {
                     method: 'POST',
@@ -475,25 +593,23 @@ RETURN d, c, e,
                     // Add document to list
                     const documentData = {
                         id: data.documentId,
-                        name: file.name,
+                        name: selectedFile.name,
                         uploadedAt: new Date().toISOString()
                     };
-
-                    if (!documentData.id) {
-                        throw new Error('Invalid document data received from server');
-                    }
 
                     // Add new document to list and select it
                     documents.set(documentData.id, documentData);
                     addDocumentToList(documentData);
                     selectDocument(documentData.id);
-                    updateUIState();
+                    
+                    // Update UI state
+                    document.getElementById('scenario-section').style.display = 'none';
+                    document.getElementById('document-list').style.display = 'block';
+                    document.getElementById('remove-document').style.display = 'block';
+                    document.getElementById('drop-zone').style.display = 'none';
                     
                     // Clear chat for the new document
                     clearChat();
-
-                    // Hide loading indicator
-                    document.getElementById('upload-loading').classList.remove('active');
                 } else {
                     throw new Error(data.error || 'Failed to process PDF');
                 }
@@ -505,6 +621,33 @@ RETURN d, c, e,
                 document.getElementById('upload-loading').classList.remove('active');
             }
         }
+
+        // Modified handleReset
+        function handleReset() {
+            if (confirm('Are you sure you want to remove the current document?')) {
+                fetch(`${API_ENDPOINT}/cleanup`, {
+                    method: 'POST'
+                }).then(() => {
+                    // Reset UI state
+                    selectedFile = null;
+                    documents.clear();
+                    document.getElementById('documents').innerHTML = '';
+                    document.getElementById('scenario-section').style.display = 'block';
+                    document.getElementById('document-list').style.display = 'none';
+                    document.getElementById('remove-document').style.display = 'none';
+                    document.getElementById('drop-zone').style.display = 'block';
+                    document.getElementById('drop-zone').classList.remove('hidden');
+                    document.getElementById('drop-zone').querySelector('p').textContent = 'Drop your PDF here';
+                    document.getElementById('scenario-description').value = '';
+                    updateSubmitButtonState();
+                    clearChat();
+                    disableChat(true);
+                });
+            }
+        }
+
+        // Add event listener for scenario description changes
+        document.getElementById('scenario-description').addEventListener('input', updateSubmitButtonState);
 
         // Function to disable/enable chat
         function disableChat(disabled) {
@@ -617,24 +760,22 @@ RETURN d, c, e,
         // Error handling functions
         function showError(message) {
             const errorDiv = document.getElementById('upload-error');
-            errorDiv.textContent = message;
+            errorDiv.innerHTML = `
+                <div class="error-title">Error Processing Document</div>
+                <div class="error-message">${message}</div>
+                <div class="error-action">Please ensure all required services are running and try again.</div>
+            `;
             errorDiv.classList.add('active');
+            
+            // Reset UI state
+            document.getElementById('drop-zone').classList.remove('hidden');
+            document.getElementById('upload-loading').classList.remove('active');
         }
 
         function hideError() {
             const errorDiv = document.getElementById('upload-error');
-            errorDiv.textContent = '';
+            errorDiv.innerHTML = '';
             errorDiv.classList.remove('active');
-        }
-
-        function handleReset() {
-            if (confirm('Are you sure you want to remove the current document?')) {
-                fetch(`${API_ENDPOINT}/cleanup`, {
-                    method: 'POST'
-                }).then(() => {
-                    location.reload();
-                });
-            }
         }
 
         function copyQuery(button) {

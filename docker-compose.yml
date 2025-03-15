@@ -1,12 +1,6 @@
 version: '2'
 
 services:
-  spacyapi:
-    image: jgontrum/spacyapi:en_v2
-    ports:
-      - "127.0.0.1:8080:80"
-    restart: always
-
   neo4j:
     image: neo4j:community
     ports:
@@ -34,27 +28,7 @@ services:
       - neo4j_plugins:/var/lib/neo4j/plugins
     restart: always
 
-  ollama:
-    image: ollama/ollama:latest
-    ports:
-      - "127.0.0.1:11434:11434"
-    volumes:
-      - ollama_data:/root/.ollama
-      - ./scripts:/scripts
-    environment:
-      - OLLAMA_HOST=0.0.0.0
-    deploy:
-      resources:
-        limits:
-          memory: 10G # Set to handle Mistral 7B model
-        reservations:
-          memory: 10G # Minimum required for model
-    restart: always
-    entrypoint: [ "/bin/sh" ]
-    command: [ "/scripts/start_mistral.sh" ]
-
 volumes:
-  ollama_data:
   neo4j_data:
   neo4j_logs:
   neo4j_import:

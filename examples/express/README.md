@@ -11,18 +11,15 @@ This is an example implementation showing how to use docuGraphRAG.js with Expres
 
 ## Prerequisites
 - Node.js 18+
-- Docker (for Qdrant)
-- Ollama with Llama2
+- Docker (for Neo4j)
+- OpenAI API key
 
 ## Quick Start
 
 1. Start the required services:
 ```bash
-# Start Qdrant
-docker run -p 6333:6333 qdrant/qdrant
-
-# Start Ollama with Llama2
-ollama run llama2
+# Start Neo4j
+docker-compose up -d
 ```
 
 2. Install dependencies:
@@ -31,12 +28,18 @@ cd examples/express
 npm install
 ```
 
-3. Run the server:
+3. Set up environment variables:
+```bash
+cp .env.example .env
+# Add your OpenAI API key to .env
+```
+
+4. Run the server:
 ```bash
 npm start
 ```
 
-4. Open your browser:
+5. Open your browser:
 ```
 http://localhost:3000
 ```

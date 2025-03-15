@@ -5,6 +5,7 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import neo4j from 'neo4j-driver';
+import pdfParse from 'pdf-parse/lib/pdf-parse.js';
 
 // Get the directory name of the current module
 const __filename = fileURLToPath(import.meta.url);
@@ -80,12 +81,35 @@ app.post('/upload', upload.single('pdf'), async (req, res) => {
             });
         }
 
+        const scenarioDescription = req.body.scenarioDescription;
+        if (!scenarioDescription) {
+            return res.status(400).json({
+                success: false,
+                error: 'Scenario description is required'
+            });
+        }
+
         console.log('Handling file upload:', {
             fileName: req.file.originalname,
-            fileSize: req.file.size
+            fileSize: req.file.size,
+            scenarioDescription
         });
 
-        const result = await docurag.processDocument(req.file.buffer, req.file.originalname);
+        // Convert scenarioDescription to string and ensure it's not [object Object]
+        const scenarioString = String(scenarioDescription);
+        if (scenarioString === '[object Object]') {
+            return res.status(400).json({
+                success: false,
+                error: 'Invalid scenario description format'
+            });
+        }
+
+        // Extract text from PDF using pdf-parse
+        const pdfData = await pdfParse(req.file.buffer);
+        const fullText = pdfData.text;
+
+        // Process the extracted text
+        const result = await docurag.processDocument(fullText, scenarioString);
         res.json({
             success: true,
             documentId: result.documentId
@@ -145,6 +169,14 @@ app.post('/cleanup', async (req, res) => {
             error: error.message || 'Failed to remove document'
         });
     }
+});
+
+// Remove the separate generateSchema endpoint since we're handling it in the library
+app.post('/generateSchema', async (req, res) => {
+    res.status(410).json({
+        success: false,
+        error: 'This endpoint is deprecated. Please include scenario description with document upload.'
+    });
 });
 
 // Start server with proper error handling
