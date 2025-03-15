@@ -1,5 +1,3 @@
-import { Neo4jConnection } from './neo4j';
-
 export class GraphTraversalService {
   constructor(config = {}) {
     this.config = {
@@ -11,34 +9,21 @@ export class GraphTraversalService {
       ...config
     };
 
-    this.neo4j = new Neo4jConnection(config);
+    if (!config.driver) {
+      throw new Error('Neo4j driver is required for GraphTraversalService');
+    }
+    this.driver = config.driver;
   }
 
   async initialize() {
-    await this.setupGraphAlgorithms();
+    // Temporarily disabled until we implement proper graph algorithm support
+    // await this.setupGraphAlgorithms();
+    return true;
   }
 
   async setupGraphAlgorithms() {
-    const session = this.neo4j.session();
+    const session = this.driver.session();
     try {
-      // Project graph for algorithms
-      await session.run(`
-                CALL gds.graph.project(
-                    'document_knowledge_graph',
-                    ['DocumentChunk', 'Entity'],
-                    {
-                        RELATES_TO: {orientation: 'UNDIRECTED'},
-                        HAS_ENTITY: {orientation: 'UNDIRECTED'},
-                        REFERENCES: {orientation: 'UNDIRECTED'},
-                        APPEARS_WITH: {orientation: 'UNDIRECTED'}
-                    },
-                    {
-                        nodeProperties: ['embedding', 'type', 'confidence'],
-                        relationshipProperties: ['weight', 'confidence']
-                    }
-                )
-            `);
-
       // Create necessary indexes
       await session.run(`
                 CREATE INDEX document_temporal IF NOT EXISTS
@@ -46,8 +31,23 @@ export class GraphTraversalService {
                 ON (e.type, e.value)
                 WHERE e.type = 'DATE'
             `);
+
+      // Create index for entity text and type
+      await session.run(`
+                CREATE INDEX entity_text_type IF NOT EXISTS
+                FOR (e:Entity)
+                ON (e.text, e.type)
+            `);
+
+      // Create index for document chunks
+      await session.run(`
+                CREATE INDEX chunk_document IF NOT EXISTS
+                FOR (c:DocumentChunk)
+                ON (c.documentId, c.chunkIndex)
+            `);
+
     } catch (error) {
-      console.error('Error setting up graph algorithms:', error);
+      console.error('Error setting up indexes:', error);
       throw error;
     } finally {
       await session.close();
@@ -55,7 +55,7 @@ export class GraphTraversalService {
   }
 
   async findPathBasedContext(question, maxHops = 3) {
-    const session = this.neo4j.session();
+    const session = this.driver.session();
     try {
       const result = await session.run(`
                 MATCH path = (start:DocumentChunk)-[*1..${maxHops}]-(related:DocumentChunk)
@@ -83,23 +83,19 @@ export class GraphTraversalService {
   }
 
   async exploreSemanticSubgraph(startNodeId) {
-    const session = this.neo4j.session();
+    const session = this.driver.session();
     try {
       const result = await session.run(`
                 MATCH (start:DocumentChunk {id: $startNodeId})
-                CALL gds.alpha.bfs.stream({
-                    nodeQuery: 'MATCH (n) WHERE n:DocumentChunk OR n:Entity RETURN id(n) AS id',
-                    relationshipQuery: 'MATCH (n)-[r]->(m) RETURN id(n) AS source, id(m) AS target, type(r) AS type',
-                    startNode: start,
-                    maxDepth: 3
-                })
-                YIELD path
+                MATCH path = (start)-[*1..3]-(n)
+                WHERE n:DocumentChunk OR n:Entity
                 WITH path, 
                      [n IN nodes(path) WHERE n:Entity | n.text] as entityTexts,
                      length(path) as pathLength
                 RETURN path, entityTexts, pathLength,
                        1.0 / pathLength as relevanceScore
                 ORDER BY relevanceScore DESC
+                LIMIT 10
             `, { startNodeId });
 
       return result.records.map(record => ({
@@ -114,14 +110,42 @@ export class GraphTraversalService {
   }
 
   async performKnowledgeReasoning(question, questionEmbedding) {
-    const session = this.neo4j.session();
+    const session = this.driver.session();
     try {
       const result = await session.run(`
                 MATCH (start:Entity)-[r1:RELATES_TO]->(middle:Entity)-[r2:RELATES_TO]->(end:Entity)
                 WHERE start.type = 'CONCEPT' AND end.type = 'CONCEPT'
-                WITH start, middle, end,
-                     gds.similarity.cosine(start.embedding, $questionEmbedding) as startRelevance,
-                     gds.similarity.cosine(end.embedding, $questionEmbedding) as endRelevance,
+                WITH start, middle, end, r1, r2,
+                     // Manual cosine similarity calculation for start entity
+                     CASE 
+                       WHEN start.embedding IS NOT NULL THEN
+                         reduce(dot = 0.0, i in range(0, size(start.embedding)-1) | 
+                           dot + start.embedding[i] * $questionEmbedding[i]
+                         ) / (
+                           sqrt(reduce(l2 = 0.0, i in range(0, size(start.embedding)-1) | 
+                             l2 + start.embedding[i] * start.embedding[i]
+                           )) * 
+                           sqrt(reduce(l2 = 0.0, i in range(0, size($questionEmbedding)-1) | 
+                             l2 + $questionEmbedding[i] * $questionEmbedding[i]
+                           ))
+                         )
+                       ELSE 0
+                     END as startRelevance,
+                     // Manual cosine similarity calculation for end entity
+                     CASE 
+                       WHEN end.embedding IS NOT NULL THEN
+                         reduce(dot = 0.0, i in range(0, size(end.embedding)-1) | 
+                           dot + end.embedding[i] * $questionEmbedding[i]
+                         ) / (
+                           sqrt(reduce(l2 = 0.0, i in range(0, size(end.embedding)-1) | 
+                             l2 + end.embedding[i] * end.embedding[i]
+                           )) * 
+                           sqrt(reduce(l2 = 0.0, i in range(0, size($questionEmbedding)-1) | 
+                             l2 + $questionEmbedding[i] * $questionEmbedding[i]
+                           ))
+                         )
+                       ELSE 0
+                     END as endRelevance,
                      r1.confidence as conf1,
                      r2.confidence as conf2
                 WHERE startRelevance > $minConfidence OR endRelevance > $minConfidence
@@ -148,14 +172,14 @@ export class GraphTraversalService {
   }
 
   async findTemporalContext(targetDate, windowDays = 7) {
-    const session = this.neo4j.session();
+    const session = this.driver.session();
     try {
       const result = await session.run(`
                 MATCH (d:Document)-[:HAS_CHUNK]->(c:DocumentChunk)-[:HAS_ENTITY]->(e:Entity)
                 WHERE e.type = 'DATE' AND 
-                      date(e.value) >= date($targetDate) - duration({days: $windowDays}) AND
-                      date(e.value) <= date($targetDate) + duration({days: $windowDays})
-                WITH c, e, abs(duration.between(date(e.value), date($targetDate)).days) as dayDiff
+                      datetime(e.value) >= datetime($targetDate) - duration({days: $windowDays}) AND
+                      datetime(e.value) <= datetime($targetDate) + duration({days: $windowDays})
+                WITH c, e, abs(duration.between(datetime(e.value), datetime($targetDate)).days) as dayDiff
                 ORDER BY dayDiff
                 WITH c, e, dayDiff, 
                      1.0 / (1 + dayDiff) as temporalRelevance
@@ -182,7 +206,7 @@ export class GraphTraversalService {
   }
 
   async expandEntityContext(entityName, maxDepth = 2) {
-    const session = this.neo4j.session();
+    const session = this.driver.session();
     try {
       const result = await session.run(`
                 MATCH (source:Entity {text: $entityName})
@@ -220,7 +244,7 @@ export class GraphTraversalService {
   }
 
   async findWeightedPaths(startEntity, endEntity) {
-    const session = this.neo4j.session();
+    const session = this.driver.session();
     try {
       const result = await session.run(`
                 MATCH path = shortestPath(

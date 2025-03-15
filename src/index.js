@@ -6,7 +6,7 @@ import { v4 as uuidv4 } from 'uuid';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { GraphTraversalService } from './graphTraversal';
+import { GraphTraversalService } from './graphTraversal.js';
 
 // Get the directory name of the current module
 const __filename = fileURLToPath(import.meta.url);
@@ -85,8 +85,12 @@ export class DocuGraphRAG {
                 model: this.config.openaiModel
             });
 
-            // Initialize GraphTraversal service
-            this.graphTraversal = new GraphTraversalService(this.config);
+            // Initialize GraphTraversal service with the existing driver
+            this.graphTraversal = new GraphTraversalService({
+                ...this.config,
+                driver: this.driver,
+                debug: this.debug
+            });
 
             // Create basic indexes
             const session = this.driver.session();
@@ -249,7 +253,9 @@ export class DocuGraphRAG {
             const cypherResponse = await this.llm.processTextToGraph(text, documentId, chunkId, analysisDescription);
 
             // Full debug logging
-            console.log('Full Cypher Response:', JSON.stringify(cypherResponse, null, 2));
+            if (this.debug) {
+                console.log('Full Cypher Response:', JSON.stringify(cypherResponse, null, 2));
+            }
 
             if (!cypherResponse || typeof cypherResponse !== 'object') {
                 throw new Error('Invalid response format from LLM');
@@ -263,60 +269,15 @@ export class DocuGraphRAG {
                 throw new Error('Incomplete Cypher query received from LLM');
             }
 
-            // Validate params structure
-            if (!cypherResponse.params || !cypherResponse.params.entities || !Array.isArray(cypherResponse.params.entities)) {
-                throw new Error('Invalid or missing entities in parameters');
-            }
-
-            if (!cypherResponse.params.relationships || !Array.isArray(cypherResponse.params.relationships)) {
-                throw new Error('Invalid or missing relationships in parameters');
-            }
-
-            // Sanitize parameters to ensure they are primitive types
-            const sanitizeValue = (value) => {
-                if (value === null || value === undefined) return null;
-                if (typeof value !== 'object') return value;
-                if (Array.isArray(value)) return value.map(sanitizeValue);
-                if (value instanceof Map) return Object.fromEntries(value);
-
-                const sanitized = {};
-                for (const [key, val] of Object.entries(value)) {
-                    sanitized[key] = sanitizeValue(val);
-                }
-                return sanitized;
-            };
-
-            // Deep sanitize all parameters
-            const sanitizedParams = {
-                entities: cypherResponse.params.entities.map(entity => ({
-                    ...entity,
-                    properties: sanitizeValue(entity.properties)
-                })),
-                relationships: cypherResponse.params.relationships.map(rel => ({
-                    ...rel,
-                    properties: sanitizeValue(rel.properties)
-                }))
-            };
-
-            // Execute the query with sanitized parameters
+            // Execute the query with parameters
             const session = this.driver.session();
             try {
-                // Merge documentId and chunkId with sanitized parameters
-                const finalParams = {
-                    ...sanitizedParams,
-                    documentId: documentId,
-                    chunkIndex: chunkId
-                };
+                const result = await session.run(cypherResponse.query, cypherResponse.params);
 
-                // Log the final query and parameters
-                console.log('Executing Cypher Query:', cypherResponse.query);
-                console.log('With Parameters:', JSON.stringify(finalParams, null, 2));
-
-                const result = await session.run(cypherResponse.query, finalParams);
-
-                // The query will return entityCount and relationshipCount
-                const entityCount = result.records[0]?.get('entityCount') || 0;
-                const relationshipCount = result.records[0]?.get('relationshipCount') || 0;
+                // Get the counts from the query result
+                const record = result.records[0];
+                const entityCount = record?.get('entityCount') || 0;
+                const relationshipCount = record?.get('relationshipCount') || 0;
 
                 return {
                     success: true,
@@ -405,7 +366,7 @@ export class DocuGraphRAG {
                 WHERE toLower(e.text) IN [word IN split(toLower($question), ' ') | word]
                    OR toLower($question) CONTAINS toLower(e.text)
                 RETURN DISTINCT e
-                ORDER BY length(e.text) DESC
+                ORDER BY size(e.text) DESC
                 LIMIT 5
             `, { question });
 

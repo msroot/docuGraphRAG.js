@@ -83,7 +83,7 @@ IMPORTANT:
         }
     }
 
-    async processTextToGraph(text, analysisDescription, documentId, chunkIndex) {
+    async processTextToGraph(text, documentId, chunkIndex, analysisDescription) {
         let embedding;
         try {
             // First, get the vector embedding for the chunk
@@ -101,6 +101,7 @@ IMPORTANT:
 
         let entities = [];
         let relationships = [];
+        let useSimpleQuery = false;
 
         try {
             // Try to get entities and relationships from the LLM
@@ -126,46 +127,72 @@ IMPORTANT:
             }
         } catch (error) {
             console.warn('Entity extraction failed, continuing with vector embeddings only:', error);
-            // Continue execution - we'll store the chunk without entities
+            useSimpleQuery = true;
         }
 
-        // Create appropriate Cypher query based on whether we have entities
+        // Create appropriate Cypher query based on whether we have entities and if previous query failed
         let query;
-        if (entities.length > 0) {
-            // Full query with entities and relationships
-            query = `
-                // First create the document chunk with its embedding
-                MATCH (d:Document {documentId: $documentId})
-                CREATE (c:DocumentChunk)
-                SET c += {
-                    documentId: $documentId,
-                    chunkIndex: $chunkIndex,
-                    content: $text,
-                    embedding: $embedding,
-                    hasEntities: true
-                }
-                CREATE (d)-[:HAS_CHUNK]->(c)
+        if (!useSimpleQuery && entities.length > 0) {
+            try {
+                // Validate and sanitize entity properties to ensure they are primitive types
+                entities = entities.map(e => {
+                    // Convert base properties to strings
+                    const baseProps = {
+                        text: String(e.text),
+                        type: String(e.type)
+                    };
 
-                // Then create entities
-                WITH c
-                UNWIND $entities as entity
-                CREATE (e:Entity)
-                SET e += {
-                    text: entity.text,
-                    type: entity.type,
-                    properties: entity.properties
-                }
-                CREATE (c)-[:HAS_ENTITY]->(e)
-                WITH c, collect(e) as entityNodes
+                    // Flatten and sanitize additional properties
+                    if (e.properties && typeof e.properties === 'object') {
+                        for (const [key, value] of Object.entries(e.properties)) {
+                            // Skip null or undefined values
+                            if (value == null) continue;
+                            // Convert everything else to string
+                            baseProps[`prop_${key}`] = String(value);
+                        }
+                    }
 
-                // Finally create relationships
-                UNWIND $relationships as rel
-                MATCH (e1:Entity {text: rel.from, type: rel.fromType})<-[:HAS_ENTITY]-(c)
-                MATCH (e2:Entity {text: rel.to, type: rel.toType})<-[:HAS_ENTITY]-(c)
-                CREATE (e1)-[r:RELATES_TO {type: rel.type}]->(e2)
-                RETURN count(r) as relationshipCount
-            `;
+                    return baseProps;
+                });
+
+                // Full query with entities and relationships
+                query = `
+                    // First create the document chunk with its embedding
+                    MATCH (d:Document {documentId: $documentId})
+                    CREATE (c:DocumentChunk)
+                    SET c += {
+                        documentId: $documentId,
+                        chunkIndex: $chunkIndex,
+                        content: $text,
+                        embedding: $embedding,
+                        hasEntities: true
+                    }
+                    CREATE (d)-[:HAS_CHUNK]->(c)
+
+                    // Then create entities
+                    WITH c
+                    UNWIND $entities as entity
+                    CREATE (e:Entity)
+                    SET e = entity
+                    CREATE (c)-[:HAS_ENTITY]->(e)
+
+                    // Finally create relationships
+                    WITH c, collect(e) as entityNodes
+                    UNWIND $relationships as rel
+                    MATCH (e1:Entity {text: rel.from, type: rel.fromType})<-[:HAS_ENTITY]-(c)
+                    MATCH (e2:Entity {text: rel.to, type: rel.toType})<-[:HAS_ENTITY]-(c)
+                    CREATE (e1)-[r:RELATES_TO {type: rel.type}]->(e2)
+                    RETURN count(r) as relationshipCount, count(entityNodes) as entityCount
+                `;
+            } catch (error) {
+                console.warn('Error preparing entity data, falling back to vector-only storage:', error);
+                useSimpleQuery = true;
+            }
         } else {
+            useSimpleQuery = true;
+        }
+
+        if (useSimpleQuery) {
             // Simplified query for chunks with only vector embeddings
             query = `
                 MATCH (d:Document {documentId: $documentId})
@@ -178,27 +205,26 @@ IMPORTANT:
                     hasEntities: false
                 }
                 CREATE (d)-[:HAS_CHUNK]->(c)
-                RETURN c
+                RETURN 0 as relationshipCount, 0 as entityCount
             `;
+            // Reset entities and relationships for the params
+            entities = [];
+            relationships = [];
         }
 
         // Prepare parameters
         const params = {
-            documentId: documentId,
-            chunkIndex: chunkIndex,
-            text: text,
-            embedding: embedding,
-            entities: entities.map(e => ({
-                text: e.text,
-                type: e.type,
-                properties: e.properties || {}
-            })),
+            documentId,
+            chunkIndex,
+            text,
+            embedding,
+            entities,
             relationships: relationships.map(r => ({
-                from: r.from,
-                fromType: r.fromType,
-                to: r.to,
-                toType: r.toType,
-                type: r.type
+                from: String(r.from),
+                fromType: String(r.fromType),
+                to: String(r.to),
+                toType: String(r.toType),
+                type: String(r.type)
             }))
         };
 
@@ -379,24 +405,42 @@ Provide a clear and concise answer based ONLY on the information provided in the
                 .map(term => `${term}~`)
                 .join(' OR ');
 
-            // Construct the Cypher query combining vector similarity, full-text, and graph structure
+            // Construct the Cypher query using manual cosine similarity calculation
             const query = documentId ? `
                 // Match document chunks for the specific document
                 MATCH (d:Document {documentId: $documentId})-[:HAS_CHUNK]->(c:DocumentChunk)
+                WHERE c.embedding IS NOT NULL
                 
-                // Calculate vector similarity
-                WITH c, gds.similarity.cosine(c.embedding, $questionEmbedding) AS vectorScore
-                
-                // Perform full-text search on content
-                CALL db.index.fulltext.queryNodes("chunkContent", $searchTerms) 
-                YIELD node as ftNode, score as textScore
-                WHERE ftNode = c
-                
-                // Combine scores and get entities
+                // Calculate cosine similarity manually
                 WITH c, 
-                     vectorScore * 0.6 + textScore * 0.4 as combinedScore
+                     reduce(dot = 0.0, i in range(0, size(c.embedding)-1) | 
+                         dot + c.embedding[i] * $questionEmbedding[i]
+                     ) / (
+                         sqrt(reduce(l2 = 0.0, i in range(0, size(c.embedding)-1) | 
+                             l2 + c.embedding[i] * c.embedding[i]
+                         )) * 
+                         sqrt(reduce(l2 = 0.0, i in range(0, size($questionEmbedding)-1) | 
+                             l2 + $questionEmbedding[i] * $questionEmbedding[i]
+                         ))
+                     ) as vectorScore
+                
+                // Perform full-text search on content if terms exist
+                WITH c, vectorScore,
+                     apoc.text.fuzzyMatch(c.content, $searchTerms) as textScore
+                
+                // Combine scores
+                WITH c, 
+                     CASE 
+                         WHEN vectorScore IS NULL THEN 0 
+                         ELSE vectorScore 
+                     END * 0.6 + 
+                     CASE 
+                         WHEN textScore > 0 THEN textScore 
+                         ELSE 0 
+                     END * 0.4 as combinedScore
                 
                 // Order by combined score and limit results
+                WHERE combinedScore > 0
                 ORDER BY combinedScore DESC
                 LIMIT $topK
                 
@@ -407,20 +451,38 @@ Provide a clear and concise answer based ONLY on the information provided in the
             ` : `
                 // Match all document chunks
                 MATCH (d:Document)-[:HAS_CHUNK]->(c:DocumentChunk)
+                WHERE c.embedding IS NOT NULL
                 
-                // Calculate vector similarity
-                WITH c, gds.similarity.cosine(c.embedding, $questionEmbedding) AS vectorScore
+                // Calculate cosine similarity manually
+                WITH c, 
+                     reduce(dot = 0.0, i in range(0, size(c.embedding)-1) | 
+                         dot + c.embedding[i] * $questionEmbedding[i]
+                     ) / (
+                         sqrt(reduce(l2 = 0.0, i in range(0, size(c.embedding)-1) | 
+                             l2 + c.embedding[i] * c.embedding[i]
+                         )) * 
+                         sqrt(reduce(l2 = 0.0, i in range(0, size($questionEmbedding)-1) | 
+                             l2 + $questionEmbedding[i] * $questionEmbedding[i]
+                         ))
+                     ) as vectorScore
                 
-                // Perform full-text search on content
-                CALL db.index.fulltext.queryNodes("chunkContent", $searchTerms) 
-                YIELD node as ftNode, score as textScore
-                WHERE ftNode = c
+                // Perform full-text search on content if terms exist
+                WITH c, vectorScore,
+                     apoc.text.fuzzyMatch(c.content, $searchTerms) as textScore
                 
                 // Combine scores
                 WITH c, 
-                     vectorScore * 0.6 + textScore * 0.4 as combinedScore
+                     CASE 
+                         WHEN vectorScore IS NULL THEN 0 
+                         ELSE vectorScore 
+                     END * 0.6 + 
+                     CASE 
+                         WHEN textScore > 0 THEN textScore 
+                         ELSE 0 
+                     END * 0.4 as combinedScore
                 
                 // Order by combined score and limit results
+                WHERE combinedScore > 0
                 ORDER BY combinedScore DESC
                 LIMIT $topK
                 
