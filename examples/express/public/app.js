@@ -158,7 +158,7 @@ async function sendMessage() {
     document.getElementById('thinking-container').style.display = 'flex';
 
     // Send request to server
-    const response = await fetch(`${API_ENDPOINT}/chat`, {
+    const response = await fetch(`/chat`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'

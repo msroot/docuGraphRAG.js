@@ -32,6 +32,34 @@
                     </div>
                 </div>
             </div>
+
+            <div id="search-options" class="document-list">
+                <h3>Search Options</h3>
+                <div class="documents-container">
+                    <div class="document-item">
+                        <input type="checkbox" id="vectorSearch" class="document-checkbox" checked>
+                        <div class="document-info">
+                            <div class="document-name">Vector Search</div>
+                            <div class="document-status">Semantic similarity search using embeddings</div>
+                        </div>
+                    </div>
+                    <div class="document-item">
+                        <input type="checkbox" id="textSearch" class="document-checkbox" checked>
+                        <div class="document-info">
+                            <div class="document-name">Text Search</div>
+                            <div class="document-status">Full-text search using keywords and patterns</div>
+                        </div>
+                    </div>
+                    <div class="document-item">
+                        <input type="checkbox" id="graphSearch" class="document-checkbox" checked>
+                        <div class="document-info">
+                            <div class="document-name">Graph Search</div>
+                            <div class="document-status">Search through entity relationships and connections</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <div class="document-list" id="document-list">
                 <h3>Available Documents</h3>
                 <div id="documents" class="documents-container"></div>
@@ -95,7 +123,7 @@ RETURN *;</textarea>
 
     <script>
         // API endpoint configuration
-        const API_ENDPOINT = 'http://localhost:3000';
+        
         
         let currentSessionId = null;
         let currentDocumentId = null;
@@ -164,7 +192,7 @@ RETURN *;</textarea>
         async function loadDocuments() {
             console.log('Loading documents...');
             try {
-                const response = await fetch(`${API_ENDPOINT}/documents`);
+                const response = await fetch(`/documents`);
                 if (!response.ok) {
                     throw new Error(`HTTP error! status: ${response.status}`);
                 }
@@ -380,7 +408,7 @@ RETURN DISTINCT d, c, e, r, e2`;
                 formData.append('pdf', selectedFile);
                 formData.append('scenarioDescription', scenarioDescription);
 
-                const response = await fetch(`${API_ENDPOINT}/upload`, {
+                const response = await fetch(`/upload`, {
                     method: 'POST',
                     body: formData
                 });
@@ -501,6 +529,13 @@ RETURN DISTINCT d, c, e, r, e2`;
                 return;
             }
 
+            // Get search options from checkboxes
+            const searchOptions = {
+                vectorSearch: document.getElementById('vectorSearch').checked,
+                textSearch: document.getElementById('textSearch').checked,
+                graphSearch: document.getElementById('graphSearch').checked
+            };
+
             // Disable input while processing
             messageInput.disabled = true;
 
@@ -521,14 +556,15 @@ RETURN DISTINCT d, c, e, r, e2`;
             chatMessages.scrollTop = chatMessages.scrollHeight;
 
             try {
-                const response = await fetch('/chat', {
+                const response = await fetch(`/chat`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                     },
                     body: JSON.stringify({
                         question,
-                        documentIds: selectedDocuments
+                        documentIds: selectedDocuments,
+                        ...searchOptions  // Include search options in the request
                     })
                 });
 
