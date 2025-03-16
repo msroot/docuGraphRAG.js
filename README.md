@@ -1,6 +1,3 @@
-<!-- SystemaJS SophiaAI Delphi-->
-
-
 # 🚀 docuGraphRAG.js 
 
 
@@ -29,10 +26,10 @@ docuGraphRAG.js is the successor of [docuRAG.js](https://github.com/msroot/docuR
 - Find conceptually related content
 - Efficient embedding storage and retrieval
 
-### 3. Graph Database Integration
+### 3. Basic Graph Storage
 - Stores documents as connected chunks
-- Uses Neo4j for efficient graph operations
-- Enables relationship-based retrieval
+- Uses Neo4j for efficient storage
+- Basic document-chunk relationships
 
 ### 4. Chat Interface
 - Natural language interaction with documents
@@ -215,56 +212,18 @@ graph TD
 ### 1. Document Processing
 - Splits documents into manageable chunks
 - Generates vector embeddings for each chunk
-- Extracts entities and relationships
-- Stores everything in Neo4j with proper indexing
+- Stores content in Neo4j database
 
-### 2. Advanced Search Process
+### 2. Search Process
 When you ask a question:
 1. Converts question to vector embedding
-2. Performs enhanced text search with word-level scoring
-3. Identifies relevant entities in the question
-4. Explores multiple context gathering strategies:
-   - Vector similarity (40% weight)
-   - Text matching (30% weight)
-   - Graph relationships (30% weight)
-5. Merges and ranks all contexts
-6. Generates comprehensive answer
+2. Finds relevant document chunks
+3. Generates comprehensive answer
 
-### 3. Graph Traversal Algorithms
-- **Path Finding**: Discovers connections between concepts
-- **Semantic Clustering**: Groups related information
-- **Temporal Analysis**: Tracks time-based relationships
-- **Entity Expansion**: Broadens contextual understanding
-- **Weighted Relationships**: Prioritizes stronger connections
-
-### 4. Data Structure
+### 3. Data Structure
 ```cypher
 (Document)-[:HAS_CHUNK]->(DocumentChunk)
-(DocumentChunk)-[:HAS_ENTITY]->(Entity)
-(Entity)-[:RELATES_TO {type: "..."}]->(Entity)
 ```
-
-## Advanced Features 🔧
-
-### Custom Indexes
-- Text search index on document content
-- Vector index for similarity search
-- Regular indexes for common lookups
-- Entity text and type indexing
-- Temporal index for date-based queries
-
-### Graph Algorithms
-- Breadth-first search for relationship exploration
-- Shortest path finding between entities
-- Semantic subgraph analysis
-- Multi-hop reasoning
-- Temporal pattern recognition
-
-### Fallback Mechanisms
-- Continues processing even if entity extraction fails
-- Maintains vector search capabilities
-- Tracks chunks with/without entities using `hasEntities` flag
-- Graceful degradation of search strategies
 
 ## API Reference 📚
 
@@ -307,6 +266,33 @@ cd examples/basic
 npm install
 npm start
 ```
+
+## 🗺️ Roadmap
+
+### Implemented ✓
+- Hybrid Search System
+  - Vector similarity (OpenAI embeddings)
+  - Full-text search (Neo4j indexes)
+  - Graph-based retrieval
+  - Weighted scoring (40/30/30)
+
+### Coming Soon 🚀
+- Extended Data Ingestion
+  - PDF (pdf.js + OCR)
+  - Web pages (Puppeteer)
+  - GitHub repos
+  - Markdown/MDX
+
+- Advanced Graph Algorithms
+  - Path-finding traversal
+  - Temporal relationship analysis
+  - Semantic subgraph extraction
+  - Weighted relationship scoring
+
+- Search Enhancements
+  - Multi-hop reasoning
+  - Bi-directional relevance
+  - Dynamic context windows
 
 ## Contributing 🤝
 
