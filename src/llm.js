@@ -228,32 +228,22 @@ IMPORTANT:
         return { query, params };
     }
 
-    async chat(question, options = {}) {
+    async chat(question, { documentIds }) {
         try {
-
-
             // Get combined search results
-            const searchResults = await this.enhancedSearch(question, options.documentIds);
+            const searchResults = await this.enhancedSearch(question, documentIds);
 
             // Process the results to create a context for the LLM
             let context = '';
-
             searchResults.forEach(result => {
-                // Add the chunk content with all scores
-                context += `\n📄 **Content** (Relevance Scores: Vector=${(result.vectorScore * 100).toFixed(1)}%, Text=${(result.textScore * 100).toFixed(1)}%, Graph=${(result.graphScore * 100).toFixed(1)}%)\n${result.content}\n`;
+                // Add the chunk content with scores
+                context += `\n📄 **Content** (Relevance: ${(result.combinedScore * 100).toFixed(1)}%)\n${result.content}\n`;
 
                 // Add entity information if available
                 if (result.entities && result.entities.length > 0) {
                     context += '\n🏷️ **Relevant Entities**:\n';
                     result.entities.forEach(entity => {
-                        context += `• ${entity.type}: **${entity.text}**`;
-                        if (entity.properties) {
-                            const props = typeof entity.properties === 'string'
-                                ? JSON.parse(entity.properties)
-                                : entity.properties;
-                            context += ` _(${JSON.stringify(props)})_`;
-                        }
-                        context += '\n';
+                        context += `• ${entity.type}: **${entity.text}**\n`;
                     });
                 }
 
@@ -261,51 +251,17 @@ IMPORTANT:
                 if (result.relationships && result.relationships.length > 0) {
                     context += '\n🔗 **Relationships**:\n';
                     result.relationships.forEach(rel => {
-                        context += `• **${rel.from}** (${rel.fromType}) ➜ _${rel.type}_ ➜ **${rel.to}** (${rel.toType})\n`;
+                        context += `• **${rel.from}** ➜ _${rel.type}_ ➜ **${rel.to}**\n`;
                     });
                 }
 
                 context += '\n---\n';
             });
 
-            // Generate the final answer using the combined context
-            const messages = [
-                {
-                    role: "system",
-                    content: `You are a helpful assistant that answers questions based on the provided context. 
-Use both the content and the structured information about entities and relationships to provide accurate answers.
-Format your responses using markdown:
-- Use **bold** for emphasis and important points
-- Use bullet points (•) for lists
-- Use > for quotes or important excerpts
-- Use \`code\` for technical terms or values
-- Use --- for separating sections
-- Use emojis 🎯 to make the response more engaging
-- Structure your response with clear sections when appropriate`
-                },
-                {
-                    role: "user",
-                    content: `Context:\n${context}\n\nQuestion: ${question}\n\nProvide a clear and well-formatted answer based on the above context. If the context doesn't contain enough information to answer the question confidently, say so.`
-                }
-            ];
-
-            // Create abort controller for this stream
-            const controller = new AbortController();
-
-            const response = await this.openai.chat.completions.create({
-                model: this.model,
-                messages: messages,
-                temperature: 0.7,
-                stream: true,
-                signal: controller.signal
-            });
-
-            return response;
+            // Generate the answer using the combined context
+            return await this.generateAnswer(question, context);
         } catch (error) {
-            if (error.name === 'AbortError') {
-                return null; // Stream was interrupted
-            }
-            console.error('Error in chat:', error);
+            console.error('[LLMService] STEP ERROR - chat:', error);
             throw error;
         }
     }
@@ -380,9 +336,6 @@ Format your responses using markdown:
         });
 
         try {
-            // Create abort controller for this stream
-            const controller = new AbortController();
-
             const response = await this.openai.chat.completions.create({
                 model: this.model,
                 messages: [
@@ -398,6 +351,25 @@ Format your responses using markdown:
 - Use emojis 🎯 to make the response more engaging
 - Structure your response with clear sections when appropriate
 
+For tables, use the following markdown format:
+| Column 1 | Column 2 | Column 3 |
+|----------|----------|----------|
+| Data 1   | Data 2   | Data 3   |
+
+Table styling guidelines:
+- Use tables to present structured data or comparisons
+- Keep column headers clear and concise
+- Align content properly (left for text, right for numbers)
+- Use table dividers (|) and header separators (---)
+- Add spacing around content for readability
+
+Example table:
+| Entity Type | Count | Relevance |
+|-------------|------:|-----------|
+| Person      |     5 | High      |
+| Location    |     3 | Medium    |
+| Date        |     2 | Low       |
+
 Use only the information from the context to answer questions. If you cannot find the answer in the context, say so.`
                     },
                     {
@@ -406,19 +378,12 @@ Use only the information from the context to answer questions. If you cannot fin
                     }
                 ],
                 temperature: 0.7,
-                stream: true,
-                signal: controller.signal
+                stream: true
             });
 
             this.log('7.1', 'generateAnswer', 'Answer generation completed');
-            return {
-                response,
-                controller
-            };
+            return response;
         } catch (error) {
-            if (error.name === 'AbortError') {
-                return null; // Stream was interrupted
-            }
             this.log('ERROR', 'generateAnswer', 'Error generating answer', {
                 error: error.message
             });
@@ -430,16 +395,25 @@ Use only the information from the context to answer questions. If you cannot fin
     async searchSimilarVectors(questionEmbedding, documentIds) {
         const session = this.driver.session();
         try {
-            // Use vector similarity search with cosine similarity
+            // Use native cosine similarity calculation
             const query = `
                 // Match chunks from specified documents
                 MATCH (c:DocumentChunk)
                 WHERE c.documentId IN $documentIds
                   AND c.embedding IS NOT NULL
 
-                // Calculate cosine similarity
+                // Calculate cosine similarity using dot product and magnitudes
                 WITH c, 
-                     gds.similarity.cosine(c.embedding, $embedding) AS similarity
+                     reduce(dot = 0.0, i in range(0, size($embedding)-1) |
+                        dot + c.embedding[i] * $embedding[i]
+                     ) / (
+                        sqrt(reduce(mag1 = 0.0, i in range(0, size(c.embedding)-1) |
+                            mag1 + c.embedding[i] * c.embedding[i]
+                        )) *
+                        sqrt(reduce(mag2 = 0.0, i in range(0, size($embedding)-1) |
+                            mag2 + $embedding[i] * $embedding[i]
+                        ))
+                     ) AS similarity
                 WHERE similarity > 0.6  // Minimum similarity threshold
 
                 // Return results ordered by similarity
