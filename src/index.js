@@ -548,7 +548,12 @@ export class DocuGraphRAG {
 
             // Format context with search results
             this.log('3.6', 'enhancedChat', 'Formatting context for LLM');
-            const formattedContext = this.formatContextForLLM(sortedResults);
+            const formattedContext = this.formatContextForLLM(sortedResults.map(result => ({
+                content: result.content,
+                score: result.score,
+                entities: result.entities || [],
+                relationships: result.relationships || []
+            })));
 
             // Generate the final answer
             this.log('3.7', 'enhancedChat', 'Generating answer');
@@ -592,15 +597,14 @@ export class DocuGraphRAG {
         // Group contexts by type
         const contextTypes = {
             vector: 'Vector Similarity',
-            path: 'Document Path',
-            temporal: 'Temporal Context',
-            reasoning: 'Knowledge Reasoning',
-            entity: 'Entity Context',
-            relationship: 'Entity Relationships'
+            text: 'Text Search',
+            graph: 'Graph Search'
         };
 
         for (const context of mergedContext) {
-            formattedContext += `\n### ${contextTypes[context.type] || 'Context'} (Score: ${context.normalizedScore.toFixed(3)})\n`;
+            // Use the score property directly and provide a default if undefined
+            const score = context.score || 0;
+            formattedContext += `\n### Context (Score: ${score.toFixed(3)})\n`;
 
             // Add content
             if (context.content) {
