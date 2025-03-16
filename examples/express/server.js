@@ -46,12 +46,7 @@ const upload = multer({
 });
 
 // Initialize DocuGraphRAG with environment variables
-const docurag = new DocuGraphRAG({
-    neo4jUrl: process.env.NEO4J_URL,
-    neo4jUser: process.env.NEO4J_USER,
-    neo4jPassword: process.env.NEO4J_PASSWORD,
-    debug: process.env.DEBUG === 'true'
-});
+const docurag = new DocuGraphRAG();
 
 // Get current document
 app.get('/documents', async (req, res) => {
@@ -114,7 +109,7 @@ app.post('/upload', upload.single('pdf'), async (req, res) => {
         const fullText = pdfData.text;
 
         // Process the extracted text
-        const result = await docurag.processDocument(fullText, scenarioString);
+        const result = await docurag.processDocument(fullText, scenarioDescription);
 
         // Update document name in Neo4j
         const session = driver.session();

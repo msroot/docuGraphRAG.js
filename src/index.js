@@ -1,4 +1,3 @@
-import axios from 'axios';
 import neo4j from 'neo4j-driver';
 import { Processor as DocumentProcessor } from './processor.js';
 import { LLMService } from './llm.js';
@@ -7,6 +6,7 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { GraphTraversalService } from './graphTraversal.js';
+import { RecursiveCharacterTextSplitter } from 'langchain/text_splitter';
 
 // Get the directory name of the current module
 const __filename = fileURLToPath(import.meta.url);
@@ -38,7 +38,7 @@ export class DocuGraphRAG {
             chunkSize: 1000,
             chunkOverlap: 200,
             searchLimit: 3,
-            debug: false,
+            debug: true,
             ...config,
         };
 
@@ -50,13 +50,11 @@ export class DocuGraphRAG {
         this.graphTraversal = null;
     }
 
-    log(step, methodName, message, context = {}) {
+    log(step, action, message, data = {}) {
         if (this.debug) {
-            const className = this.constructor.name;
-            console.log(
-                `[Step: ${step}][${className}][${methodName}]: ${message}`,
-                Object.entries(context).length > 0 ? context : ''
-            );
+            const timestamp = new Date().toISOString();
+            const dataStr = Object.keys(data).length > 0 ? ` | ${Object.entries(data).map(([k, v]) => `${k}=${v}`).join(', ')}` : '';
+            console.log(`[${timestamp}] [DocuGraphRAG] STEP ${step} - ${action}: ${message}${dataStr}`);
         }
     }
 
@@ -66,18 +64,23 @@ export class DocuGraphRAG {
         }
 
         try {
+            this.log('1', 'initialize', 'Starting DocuGraphRAG initialization');
+
             // Initialize Neo4j driver
+            this.log('1.1', 'initialize', 'Initializing Neo4j driver');
             this.driver = neo4j.driver(
                 this.config.neo4jUrl,
                 neo4j.auth.basic(this.config.neo4jUser, this.config.neo4jPassword)
             );
 
             // Initialize document processor
+            this.log('1.2', 'initialize', 'Initializing document processor');
             this.processor = new DocumentProcessor({
                 debug: this.debug
             });
 
             // Initialize LLM service
+            this.log('1.3', 'initialize', 'Initializing LLM service');
             this.llm = new LLMService({
                 driver: this.driver,
                 debug: this.debug,
@@ -94,72 +97,50 @@ export class DocuGraphRAG {
             // });
 
             // Create basic indexes
+            this.log('1.4', 'initialize', 'Creating Neo4j indexes');
             const session = this.driver.session();
             try {
                 await session.run(`
                     CREATE INDEX IF NOT EXISTS FOR (n:Entity)
                     ON (n.text, n.type, n.documentId)
                 `);
+                this.log('1.5', 'initialize', 'Neo4j indexes created successfully');
             } finally {
                 await session.close();
             }
 
             this.initialized = true;
+            this.log('1.6', 'initialize', 'DocuGraphRAG initialization completed');
         } catch (error) {
-            console.error('Failed to initialize DocuGraphRAG:', error);
+            this.log('ERROR', 'initialize', 'Failed to initialize DocuGraphRAG', { error: error.message });
             throw error;
         }
     }
 
     async splitText(text, chunkSize = 1000) {
-        // Split text into chunks of roughly equal size
-        const chunks = [];
-        let start = 0;
+        const splitter = new RecursiveCharacterTextSplitter({
+            chunkSize: chunkSize,
+            chunkOverlap: this.config.chunkOverlap,
+            separators: ["\n\n", "\n", ". ", " ", ""]
+        });
 
-        while (start < text.length) {
-            let end = start + chunkSize;
-
-            // If we're not at the end, try to find a good break point
-            if (end < text.length) {
-                // Look for the next period, question mark, or exclamation point
-                const nextBreak = text.indexOf('.', end);
-                const nextQuestion = text.indexOf('?', end);
-                const nextExclamation = text.indexOf('!', end);
-
-                // Find the closest break point
-                const breaks = [nextBreak, nextQuestion, nextExclamation]
-                    .filter(pos => pos !== -1)
-                    .sort((a, b) => a - b);
-
-                if (breaks.length > 0) {
-                    end = breaks[0] + 1;
-                }
-            } else {
-                end = text.length;
-            }
-
-            chunks.push({
-                pageContent: text.slice(start, end).trim(),
-                metadata: { start, end }
-            });
-
-            start = end;
-        }
-
-        return chunks;
+        const docs = await splitter.createDocuments([text]);
+        return docs.map(doc => ({
+            pageContent: doc.pageContent,
+            metadata: { start: 0, end: doc.pageContent.length }
+        }));
     }
 
     generateUUID() {
-        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
-            const r = Math.random() * 16 | 0;
-            const v = c === 'x' ? r : (r & 0x3 | 0x8);
-            return v.toString(16);
-        });
+        return uuidv4();
     }
 
     async processDocument(text, analysisDescription) {
         try {
+            this.log('2', 'processDocument', 'Starting document processing');
+
             if (!this.initialized) {
+                this.log('2.1', 'processDocument', 'Initializing DocuGraphRAG');
                 await this.initialize();
             }
 
@@ -168,6 +149,7 @@ export class DocuGraphRAG {
                 throw new Error('Text content is required');
             }
 
+            this.log('2.2', 'processDocument', 'Validating text input');
             // Convert Buffer to string if needed
             if (Buffer.isBuffer(text)) {
                 text = text.toString('utf-8');
@@ -179,27 +161,35 @@ export class DocuGraphRAG {
             }
 
             const documentId = this.generateUUID();
+            this.log('2.3', 'processDocument', 'Generated document ID', { documentId });
+
             const metadata = {
                 documentId,
-                created: new Date().toISOString()
+                created: new Date().toISOString(),
+                status: 'processing'
             };
 
             const session = this.driver.session();
             try {
-                // Create document node
+                // Create document node with processing status
+                this.log('2.4', 'processDocument', 'Creating document node');
                 await session.run(
-                    'CREATE (d:Document {documentId: $documentId, created: $created})',
+                    'CREATE (d:Document {documentId: $documentId, created: $created, status: $status})',
                     metadata
                 );
 
                 // Split text into chunks
+                this.log('2.5', 'processDocument', 'Splitting text into chunks');
                 const chunks = await this.splitText(text);
+                this.log('2.6', 'processDocument', 'Text split completed', { chunkCount: chunks.length });
 
                 // Process each chunk
                 for (let i = 0; i < chunks.length; i++) {
                     const chunk = chunks[i];
+                    this.log('2.7', 'processDocument', `Processing chunk ${i + 1}/${chunks.length}`);
 
                     // Create chunk node and link to document
+                    this.log('2.8', 'processDocument', `Creating chunk node ${i + 1}`);
                     await session.run(`
                         MATCH (d:Document {documentId: $documentId})
                         CREATE (c:DocumentChunk {documentId: $documentId, content: $content, index: $index, created: $created})
@@ -213,26 +203,40 @@ export class DocuGraphRAG {
 
                     // Extract entities after chunk is created
                     try {
+                        this.log('2.9', 'processDocument', `Extracting entities for chunk ${i + 1}`);
                         const entityResult = await this.extractEntities(chunk.pageContent, i, metadata.documentId, analysisDescription);
-                        this.log('7', 'processDocument', 'Entity extraction completed', {
-                            ...entityResult,
+                        this.log('2.10', 'processDocument', 'Entity extraction completed', {
                             chunkIndex: i,
-                            documentId: metadata.documentId
+                            documentId: metadata.documentId,
+                            entityCount: entityResult.entitiesCount,
+                            relationshipCount: entityResult.relationshipsCount
                         });
                     } catch (error) {
-                        this.log('ERROR', 'processDocument', 'Error in chunk processing', {
+                        this.log('ERROR', 'processDocument', `Error in chunk ${i + 1} processing`, {
                             error: error.message,
                             chunkIndex: i,
                             documentId: metadata.documentId
                         });
+                        // Update document status to error
+                        await session.run(
+                            'MATCH (d:Document {documentId: $documentId}) SET d.status = $status, d.error = $error',
+                            { documentId: metadata.documentId, status: 'error', error: error.message }
+                        );
                         throw error;
                     }
                 }
+
+                // Update document status to processed
+                await session.run(
+                    'MATCH (d:Document {documentId: $documentId}) SET d.status = $status, d.processedAt = datetime()',
+                    { documentId: metadata.documentId, status: 'processed' }
+                );
+
+                this.log('2.11', 'processDocument', 'Document processing completed', { documentId });
+                return { documentId: metadata.documentId, status: 'processed' };
             } finally {
                 await session.close();
             }
-
-            return { documentId: metadata.documentId };
         } catch (error) {
             this.log('ERROR', 'processDocument', 'Error in document processing', {
                 error: error.message
@@ -242,58 +246,109 @@ export class DocuGraphRAG {
     }
 
     async extractEntities(text, chunkId, documentId, analysisDescription) {
+        let entityResult = {
+            success: false,
+            entitiesCount: 0,
+            relationshipsCount: 0
+        };
+
         try {
-            if (typeof chunkId !== 'number' || chunkId < 0) {
-                throw new Error(`Invalid chunkId: ${chunkId}`);
-            }
-            if (!documentId) {
-                throw new Error('documentId is required for entity extraction');
-            }
+            this.log('5', 'extractEntities', 'Starting chunk processing', {
+                chunkId,
+                documentId,
+                textLength: text.length
+            });
 
-            // Get the Cypher query from LLM
-            const cypherResponse = await this.llm.processTextToGraph(text, documentId, chunkId, analysisDescription);
-
-            // Full debug logging
-            if (this.debug) {
-                console.log('Full Cypher Response:', JSON.stringify(cypherResponse, null, 2));
-            }
-
-            if (!cypherResponse || typeof cypherResponse !== 'object') {
-                throw new Error('Invalid response format from LLM');
-            }
-
-            if (!cypherResponse.query || typeof cypherResponse.query !== 'string') {
-                throw new Error('Invalid or missing Cypher query in LLM response');
+            // Step 1: Generate embedding first
+            this.log('5.1', 'extractEntities', 'Generating embedding for chunk');
+            let embedding;
+            try {
+                embedding = await this.generateEmbedding(text);
+                this.log('5.2', 'extractEntities', 'Embedding generated successfully', {
+                    dimensions: embedding.length
+                });
+            } catch (error) {
+                this.log('WARN', 'extractEntities', 'Failed to generate embedding', {
+                    error: error.message
+                });
+                embedding = null;
             }
 
-            if (cypherResponse.query.includes('...')) {
-                throw new Error('Incomplete Cypher query received from LLM');
+            // Step 2: Try entity extraction
+            if (typeof chunkId === 'number' && chunkId >= 0 && documentId) {
+                try {
+                    this.log('5.3', 'extractEntities', 'Attempting entity extraction');
+                    const cypherResponse = await this.llm.processTextToGraph(text, documentId, chunkId, analysisDescription, embedding);
+
+                    if (cypherResponse?.query && typeof cypherResponse.query === 'string' && !cypherResponse.query.includes('...')) {
+                        const session = this.driver.session();
+                        try {
+                            this.log('5.4', 'extractEntities', 'Executing entity extraction query');
+                            const result = await session.run(cypherResponse.query, cypherResponse.params);
+                            const record = result.records[0];
+                            entityResult = {
+                                success: true,
+                                entitiesCount: record?.get('entityCount') || 0,
+                                relationshipsCount: record?.get('relationshipCount') || 0
+                            };
+                            this.log('5.5', 'extractEntities', 'Entity extraction successful', entityResult);
+                        } finally {
+                            await session.close();
+                        }
+                    }
+                } catch (error) {
+                    this.log('WARN', 'extractEntities', 'Entity extraction failed', {
+                        error: error.message
+                    });
+                }
             }
 
-            // Execute the query with parameters
+            // Step 3: Always create/update the chunk with text and embedding
+            this.log('5.6', 'extractEntities', 'Creating/updating chunk with text and embedding');
             const session = this.driver.session();
             try {
-                const result = await session.run(cypherResponse.query, cypherResponse.params);
+                const query = `
+                    MATCH (d:Document {documentId: $documentId})
+                    MERGE (c:DocumentChunk {documentId: $documentId, chunkId: $chunkId})
+                    SET c += {
+                        content: $text,
+                        embedding: $embedding,
+                        created: datetime(),
+                        hasEntities: $hasEntities,
+                        lastUpdated: datetime()
+                    }
+                    MERGE (d)-[:HAS_CHUNK]->(c)
+                    RETURN c
+                `;
 
-                // Get the counts from the query result
-                const record = result.records[0];
-                const entityCount = record?.get('entityCount') || 0;
-                const relationshipCount = record?.get('relationshipCount') || 0;
+                await session.run(query, {
+                    documentId,
+                    chunkId,
+                    text,
+                    embedding,
+                    hasEntities: entityResult.success
+                });
+
+                this.log('5.7', 'extractEntities', 'Chunk processing completed', {
+                    documentId,
+                    chunkId,
+                    hasEmbedding: !!embedding,
+                    hasEntities: entityResult.success
+                });
 
                 return {
-                    success: true,
-                    entitiesCount: entityCount,
-                    relationshipsCount: relationshipCount,
+                    ...entityResult,
+                    hasEmbedding: !!embedding,
                     extractionResults: {
-                        total: entityCount,
-                        relationships: relationshipCount
+                        total: entityResult.entitiesCount,
+                        relationships: entityResult.relationshipsCount
                     }
                 };
             } finally {
                 await session.close();
             }
         } catch (error) {
-            this.log('ERROR', 'extractEntities', 'Error in entity extraction', {
+            this.log('ERROR', 'extractEntities', 'Critical error in chunk processing', {
                 error: error.message,
                 chunkId,
                 documentId
@@ -302,34 +357,115 @@ export class DocuGraphRAG {
         }
     }
 
-    async enhancedChat(question, options = {}) {
+    async generateEmbedding(text) {
         try {
+            this.log('6', 'generateEmbedding', 'Starting embedding generation', {
+                textLength: text.length
+            });
+
+            const response = await this.llm.openai.embeddings.create({
+                model: "text-embedding-3-small",
+                input: text,
+                dimensions: 1536
+            });
+
+            this.log('6.1', 'generateEmbedding', 'Embedding generated successfully', {
+                dimensions: response.data[0].embedding.length
+            });
+
+            return response.data[0].embedding;
+        } catch (error) {
+            this.log('ERROR', 'generateEmbedding', 'Error generating embedding', {
+                error: error.message
+            });
+            throw error;
+        }
+    }
+
+    async chat(question, options = {}) {
+        try {
+            this.log('3', 'enhancedChat', 'Starting enhanced chat processing', { question });
             const { documentIds } = options;
 
             if (!documentIds || documentIds.length === 0) {
+                this.log('ERROR', 'enhancedChat', 'No documents selected');
                 return "Please select at least one document to search through.";
             }
 
-            // For now, only use text search (we'll add entity/graph features back later)
-            const searchResults = await this.llm.searchSimilarChunks(question, '', documentIds);
+            // Generate embedding for the question
+            this.log('3.1', 'enhancedChat', 'Generating question embedding');
+            const questionEmbedding = await this.generateEmbedding(question);
 
-            if (!searchResults || searchResults.length === 0) {
+            // Get both vector and text search results
+            this.log('3.2', 'enhancedChat', 'Starting parallel search');
+            const [vectorResults, textResults] = await Promise.all([
+                this.llm.searchSimilarVectors(questionEmbedding, documentIds),
+                this.llm.searchSimilarChunks(question, '', documentIds)
+            ]);
+
+            this.log('3.3', 'enhancedChat', 'Search completed', {
+                vectorResultsCount: vectorResults.length,
+                textResultsCount: textResults.length
+            });
+
+            // Combine and deduplicate results
+            const allResults = new Map();
+
+            // Add vector results with their scores
+            vectorResults.forEach(result => {
+                allResults.set(result.content, {
+                    content: result.content,
+                    score: result.score * 0.6 // Vector results weighted at 60%
+                });
+            });
+
+            // Add text results, combining scores if content already exists
+            textResults.forEach(result => {
+                if (allResults.has(result.content)) {
+                    const existing = allResults.get(result.content);
+                    existing.score += result.score * 0.4; // Text results weighted at 40%
+                } else {
+                    allResults.set(result.content, {
+                        content: result.content,
+                        score: result.score * 0.4
+                    });
+                }
+            });
+
+            // Convert back to array and sort by score
+            const combinedResults = Array.from(allResults.values())
+                .sort((a, b) => b.score - a.score)
+                .slice(0, 5);
+
+            this.log('3.4', 'enhancedChat', 'Results combined and sorted', {
+                combinedResultsCount: combinedResults.length
+            });
+
+            if (combinedResults.length === 0) {
+                this.log('3.5', 'enhancedChat', 'No relevant results found');
                 return "I couldn't find any relevant information in the selected documents to answer your question.";
             }
 
-            // Keep using the existing formatContextForLLM for future extensibility
+            // Format context with both vector and text results
+            this.log('3.6', 'enhancedChat', 'Formatting context for LLM');
             const formattedContext = this.formatContextForLLM([
                 {
-                    type: 'text',
-                    content: searchResults.map(r => r.content).join('\n\n'),
+                    type: 'hybrid_search',
+                    content: combinedResults.map(r => r.content).join('\n\n'),
                     normalizedScore: 1.0
                 }
             ]);
 
             // Generate the final answer
-            return await this.llm.generateAnswer(question, formattedContext);
+            this.log('3.7', 'enhancedChat', 'Generating answer');
+            const answer = await this.llm.generateAnswer(question, formattedContext);
+            this.log('3.8', 'enhancedChat', 'Answer generated successfully');
+
+            return answer;
         } catch (error) {
-            console.error('Error in enhancedChat:', error);
+            this.log('ERROR', 'enhancedChat', 'Error in chat processing', {
+                error: error.message
+            });
             return "I encountered an error while trying to process your question. Please try again.";
         }
     }
@@ -397,11 +533,6 @@ export class DocuGraphRAG {
         }
 
         return formattedContext;
-    }
-
-    // Original chat method for backward compatibility
-    async chat(question, options = {}) {
-        return this.enhancedChat(question, options);
     }
 
     async cleanup() {

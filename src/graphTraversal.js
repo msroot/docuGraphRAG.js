@@ -6,13 +6,24 @@ export class GraphTraversalService {
       minConfidence: 0.6,
       weightDecay: 0.8,
       algorithms: ['path', 'temporal', 'semantic'],
+      debug: true,
       ...config
     };
+
+    this.debug = this.config.debug;
 
     if (!config.driver) {
       throw new Error('Neo4j driver is required for GraphTraversalService');
     }
     this.driver = config.driver;
+  }
+
+  log(step, action, message, data = {}) {
+    if (this.debug) {
+      const timestamp = new Date().toISOString();
+      const dataStr = Object.keys(data).length > 0 ? ` | ${Object.entries(data).map(([k, v]) => `${k}=${v}`).join(', ')}` : '';
+      console.log(`[${timestamp}] [GraphTraversal] STEP ${step} - ${action}: ${message}${dataStr}`);
+    }
   }
 
   async initialize() {
@@ -24,6 +35,7 @@ export class GraphTraversalService {
   async setupGraphAlgorithms() {
     const session = this.driver.session();
     try {
+      this.log('10', 'setupGraphAlgorithms', 'Setting up graph algorithms');
       // Create necessary indexes
       await session.run(`
                 CREATE INDEX document_temporal IF NOT EXISTS
@@ -31,6 +43,7 @@ export class GraphTraversalService {
                 ON (e.type, e.value)
                 WHERE e.type = 'DATE'
             `);
+      this.log('10.1', 'setupGraphAlgorithms', 'Created temporal index');
 
       // Create index for entity text and type
       await session.run(`
@@ -38,6 +51,7 @@ export class GraphTraversalService {
                 FOR (e:Entity)
                 ON (e.text, e.type)
             `);
+      this.log('10.2', 'setupGraphAlgorithms', 'Created entity text/type index');
 
       // Create index for document chunks
       await session.run(`
@@ -45,9 +59,10 @@ export class GraphTraversalService {
                 FOR (c:DocumentChunk)
                 ON (c.documentId, c.chunkIndex)
             `);
+      this.log('10.3', 'setupGraphAlgorithms', 'Created document chunk index');
 
     } catch (error) {
-      console.error('Error setting up indexes:', error);
+      this.log('ERROR', 'setupGraphAlgorithms', 'Error setting up indexes', { error: error.message });
       throw error;
     } finally {
       await session.close();
@@ -57,6 +72,12 @@ export class GraphTraversalService {
   async findPathBasedContext(question, maxHops = 3, documentFilter = '', documentIds = []) {
     const session = this.driver.session();
     try {
+      this.log('11', 'findPathBasedContext', 'Finding path-based context', {
+        question,
+        maxHops,
+        documentIds: documentIds.length
+      });
+
       const result = await session.run(`
                 MATCH (start:DocumentChunk)
                 WHERE start.content CONTAINS $searchTerm ${documentFilter}
@@ -78,10 +99,19 @@ export class GraphTraversalService {
         documentIds
       });
 
-      return result.records.map(record => ({
+      const paths = result.records.map(record => ({
         path: record.get('path'),
         relevance: record.get('pathRelevance')
       }));
+
+      this.log('11.1', 'findPathBasedContext', 'Found paths', {
+        pathCount: paths.length
+      });
+
+      return paths;
+    } catch (error) {
+      this.log('ERROR', 'findPathBasedContext', 'Error finding paths', { error: error.message });
+      throw error;
     } finally {
       await session.close();
     }
@@ -90,6 +120,10 @@ export class GraphTraversalService {
   async exploreSemanticSubgraph(startNodeId) {
     const session = this.driver.session();
     try {
+      this.log('12', 'exploreSemanticSubgraph', 'Exploring semantic subgraph', {
+        startNodeId
+      });
+
       const result = await session.run(`
                 MATCH (start:DocumentChunk {id: $startNodeId})
                 MATCH path = (start)-[*1..3]-(n)
@@ -103,12 +137,21 @@ export class GraphTraversalService {
                 LIMIT 10
             `, { startNodeId });
 
-      return result.records.map(record => ({
+      const subgraphs = result.records.map(record => ({
         path: record.get('path'),
         entities: record.get('entityTexts'),
         length: record.get('pathLength'),
         relevance: record.get('relevanceScore')
       }));
+
+      this.log('12.1', 'exploreSemanticSubgraph', 'Found subgraphs', {
+        subgraphCount: subgraphs.length
+      });
+
+      return subgraphs;
+    } catch (error) {
+      this.log('ERROR', 'exploreSemanticSubgraph', 'Error exploring subgraph', { error: error.message });
+      throw error;
     } finally {
       await session.close();
     }
@@ -117,6 +160,11 @@ export class GraphTraversalService {
   async performKnowledgeReasoning(question, questionEmbedding) {
     const session = this.driver.session();
     try {
+      this.log('13', 'performKnowledgeReasoning', 'Starting knowledge reasoning', {
+        question,
+        embeddingDimensions: questionEmbedding.length
+      });
+
       const result = await session.run(`
                 MATCH (start:Entity)-[r1:RELATES_TO]->(middle:Entity)-[r2:RELATES_TO]->(end:Entity)
                 WHERE start.type = 'CONCEPT' AND end.type = 'CONCEPT'
@@ -164,13 +212,22 @@ export class GraphTraversalService {
         minConfidence: this.config.minConfidence
       });
 
-      return result.records.map(record => ({
+      const reasoningResults = result.records.map(record => ({
         startEntity: record.get('start').properties,
         middleEntity: record.get('middle').properties,
         endEntity: record.get('end').properties,
         relevance: record.get('pathRelevance'),
         chain: record.get('reasoningChain')
       }));
+
+      this.log('13.1', 'performKnowledgeReasoning', 'Completed knowledge reasoning', {
+        resultCount: reasoningResults.length
+      });
+
+      return reasoningResults;
+    } catch (error) {
+      this.log('ERROR', 'performKnowledgeReasoning', 'Error in knowledge reasoning', { error: error.message });
+      throw error;
     } finally {
       await session.close();
     }
@@ -179,6 +236,12 @@ export class GraphTraversalService {
   async findTemporalContext(targetDate, windowDays = 7, documentFilter = '', documentIds = []) {
     const session = this.driver.session();
     try {
+      this.log('14', 'findTemporalContext', 'Finding temporal context', {
+        targetDate: targetDate.toISOString(),
+        windowDays,
+        documentIds: documentIds.length
+      });
+
       const result = await session.run(`
                 MATCH (d:Document)-[:HAS_CHUNK]->(c:DocumentChunk)-[:HAS_ENTITY]->(e:Entity)
                 WHERE e.type = 'DATE' 
@@ -201,12 +264,21 @@ export class GraphTraversalService {
         documentIds
       });
 
-      return result.records.map(record => ({
+      const temporalResults = result.records.map(record => ({
         content: record.get('content'),
         date: record.get('date'),
         daysApart: record.get('dayDiff'),
         relevance: record.get('temporalRelevance')
       }));
+
+      this.log('14.1', 'findTemporalContext', 'Found temporal context', {
+        resultCount: temporalResults.length
+      });
+
+      return temporalResults;
+    } catch (error) {
+      this.log('ERROR', 'findTemporalContext', 'Error finding temporal context', { error: error.message });
+      throw error;
     } finally {
       await session.close();
     }
@@ -215,6 +287,12 @@ export class GraphTraversalService {
   async expandEntityContext(entityName, maxDepth = 2, documentFilter = '', documentIds = []) {
     const session = this.driver.session();
     try {
+      this.log('15', 'expandEntityContext', 'Expanding entity context', {
+        entityName,
+        maxDepth,
+        documentIds: documentIds.length
+      });
+
       const result = await session.run(`
                 MATCH (source:Entity {text: $entityName})<-[:HAS_ENTITY]-(c:DocumentChunk)
                 WHERE 1=1 ${documentFilter}
@@ -244,11 +322,20 @@ export class GraphTraversalService {
         documentIds
       });
 
-      return result.records.map(record => ({
+      const contextResults = result.records.map(record => ({
         entity: record.get('node').properties,
         chunk: record.get('chunk').properties,
         relevance: record.get('score')
       }));
+
+      this.log('15.1', 'expandEntityContext', 'Expanded entity context', {
+        resultCount: contextResults.length
+      });
+
+      return contextResults;
+    } catch (error) {
+      this.log('ERROR', 'expandEntityContext', 'Error expanding entity context', { error: error.message });
+      throw error;
     } finally {
       await session.close();
     }

@@ -7,7 +7,7 @@ export class Processor {
         this.config = {
             chunkSize: 1000,
             chunkOverlap: 200,
-            debug: false,
+            debug: true,
             ...config
         };
 
@@ -19,34 +19,53 @@ export class Processor {
         });
     }
 
-    log(...args) {
+    log(step, action, message, data = {}) {
         if (this.debug) {
-            console.log('[Processor]', ...args);
+            const timestamp = new Date().toISOString();
+            console.log(JSON.stringify({
+                timestamp,
+                step: `STEP ${step}`,
+                service: 'DocumentProcessor',
+                action,
+                message,
+                ...data
+            }, null, 2));
         }
     }
 
     async extractTextFromPDF(pdfBuffer) {
         try {
-            this.log('Starting PDF text extraction');
+            this.log('9', 'extractTextFromPDF', 'Starting PDF text extraction');
             const data = await pdfParse(pdfBuffer);
-            this.log(`PDF text extraction complete. Extracted ${data.text.length} characters`);
+            this.log('9.1', 'extractTextFromPDF', 'PDF text extraction completed', {
+                pageCount: data.numpages,
+                textLength: data.text.length
+            });
             return data.text;
         } catch (error) {
-            console.error('[Processor] Error extracting text from PDF:', error);
-            throw new Error('Failed to extract text from PDF');
+            this.log('ERROR', 'extractTextFromPDF', 'Error extracting text from PDF', {
+                error: error.message
+            });
+            throw error;
         }
     }
 
     async processDocument(buffer, fileName) {
         try {
-            this.log(`Starting document processing for file: ${fileName}`);
+            this.log('8', 'processDocument', 'Starting document processing', {
+                fileName
+            });
+
             if (!fileName.toLowerCase().endsWith('.pdf')) {
                 throw new Error('Only PDF files are supported');
             }
 
+            this.log('8.1', 'processDocument', 'Extracting text from PDF');
             const text = await this.extractTextFromPDF(buffer);
+            this.log('8.2', 'processDocument', 'Text extraction completed', {
+                textLength: text.length
+            });
 
-            // Create a LangChain Document with basic metadata
             const doc = new Document({
                 pageContent: text,
                 metadata: {
@@ -56,10 +75,12 @@ export class Processor {
                 }
             });
 
-            // Use LangChain's built-in document splitting
+            this.log('8.3', 'processDocument', 'Splitting document into chunks');
             const docs = await this.textSplitter.splitDocuments([doc]);
+            this.log('8.4', 'processDocument', 'Document splitting completed', {
+                chunkCount: docs.length
+            });
 
-            // Simplify chunks to avoid nested objects
             const simplifiedChunks = docs.map(doc => ({
                 pageContent: doc.pageContent,
                 source: doc.metadata.source,
@@ -67,7 +88,7 @@ export class Processor {
                 created: doc.metadata.created
             }));
 
-            return {
+            const result = {
                 metadata: {
                     fileName,
                     fileType: 'pdf',
@@ -76,8 +97,18 @@ export class Processor {
                 },
                 chunks: simplifiedChunks
             };
+
+            this.log('8.5', 'processDocument', 'Document processing completed', {
+                fileName,
+                totalChunks: result.metadata.totalChunks
+            });
+
+            return result;
         } catch (error) {
-            console.error('[Processor] Error processing document:', error);
+            this.log('ERROR', 'processDocument', 'Error processing document', {
+                error: error.message,
+                fileName
+            });
             throw error;
         }
     }

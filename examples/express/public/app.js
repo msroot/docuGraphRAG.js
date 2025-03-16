@@ -34,7 +34,7 @@ function renderDocuments() {
 
     const name = document.createElement('div');
     name.className = 'document-name';
-    name.textContent = `Document ${doc.documentId.slice(0, 8)}...`;
+    name.textContent = doc.name || 'Untitled Document';
 
     const date = document.createElement('div');
     date.className = 'document-date';
@@ -127,4 +127,67 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
   });
-}); 
+});
+
+async function sendMessage() {
+  const messageInput = document.getElementById('user-input');
+  const chatMessages = document.getElementById('chat-container');
+  const question = messageInput.value.trim();
+
+  if (!question) return;
+
+  // Get selected document IDs
+  const selectedDocuments = Array.from(document.querySelectorAll('.document-checkbox:checked'))
+    .map(checkbox => checkbox.getAttribute('value'))
+    .filter(id => id); // Filter out any null/undefined values
+
+  if (selectedDocuments.length === 0) {
+    alert('Please select at least one document');
+    return;
+  }
+
+  // Clear input and disable it while processing
+  messageInput.value = '';
+  messageInput.disabled = true;
+
+  try {
+    // Add user message
+    addMessageToChat('user', question);
+
+    // Show thinking indicator
+    document.getElementById('thinking-container').style.display = 'flex';
+
+    // Send request to server
+    const response = await fetch(`${API_ENDPOINT}/chat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        question,
+        documentIds: selectedDocuments
+      })
+    });
+
+    // Hide thinking indicator
+    document.getElementById('thinking-container').style.display = 'none';
+
+    const data = await response.json();
+
+    if (data.error) {
+      addMessageToChat('system', `Error: ${data.error}`);
+      return;
+    }
+
+    addMessageToChat('assistant', data.answer);
+  } catch (error) {
+    console.error('Chat error:', error);
+    // Hide thinking indicator
+    document.getElementById('thinking-container').style.display = 'none';
+    addMessageToChat('system', 'An error occurred while processing your question.');
+  } finally {
+    // Re-enable input
+    messageInput.disabled = false;
+    messageInput.focus();
+  }
+} 

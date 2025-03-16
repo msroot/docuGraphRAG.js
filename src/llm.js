@@ -3,7 +3,7 @@ import OpenAI from 'openai';
 export class LLMService {
     constructor(config = {}) {
         this.config = {
-            debug: false,
+            debug: true,
             apiKey: process.env.OPENAI_API_KEY,
             model: 'gpt-4',
             temperature: 0.1,
@@ -60,9 +60,11 @@ IMPORTANT:
         this.model = this.config.model;
     }
 
-    log(message) {
+    log(step, action, message, data = {}) {
         if (this.debug) {
-            console.log(`[LLMService][${this.config.model}] ${message}`);
+            const timestamp = new Date().toISOString();
+            const dataStr = Object.keys(data).length > 0 ? ` | ${Object.entries(data).map(([k, v]) => `${k}=${v}`).join(', ')}` : '';
+            console.log(`[${timestamp}] [LLMService] STEP ${step} - ${action}: ${message}${dataStr}`);
         }
     }
 
@@ -82,27 +84,14 @@ IMPORTANT:
         }
     }
 
-    async processTextToGraph(text, documentId, chunkIndex, analysisDescription) {
-        let embedding;
-        try {
-            // First, get the vector embedding for the chunk
-            const embeddingResponse = await this.openai.embeddings.create({
-                model: "text-embedding-3-small",
-                input: text,
-                encoding_format: "float"
-            });
-
-            embedding = embeddingResponse.data[0].embedding;
-        } catch (error) {
-            console.error('Error getting vector embedding:', error);
-            throw error; // We can't proceed without embeddings
-        }
+    async processTextToGraph(text, documentId, chunkIndex, analysisDescription, embedding) {
 
         let entities = [];
         let relationships = [];
         let useSimpleQuery = false;
 
         try {
+            this.log('4.3', 'processTextToGraph', 'Extracting entities and relationships');
             // Try to get entities and relationships from the LLM
             const messages = [
                 { role: "system", content: this.systemPrompt },
@@ -123,30 +112,32 @@ IMPORTANT:
                 const parsedResponse = JSON.parse(content);
                 entities = parsedResponse.entities || [];
                 relationships = parsedResponse.relationships || [];
+                this.log('4.4', 'processTextToGraph', 'Entities and relationships extracted', {
+                    entityCount: entities.length,
+                    relationshipCount: relationships.length
+                });
             }
         } catch (error) {
-            console.warn('Entity extraction failed, continuing with vector embeddings only:', error);
+            this.log('WARN', 'processTextToGraph', 'Entity extraction failed, using vector embeddings only', {
+                error: error.message
+            });
             useSimpleQuery = true;
         }
 
-        // Create appropriate Cypher query based on whether we have entities and if previous query failed
         let query;
         if (!useSimpleQuery && entities.length > 0) {
             try {
-                // Validate and sanitize entity properties to ensure they are primitive types
+                this.log('4.5', 'processTextToGraph', 'Building full query with entities');
+                // Validate and sanitize entity properties
                 entities = entities.map(e => {
-                    // Convert base properties to strings
                     const baseProps = {
                         text: String(e.text),
                         type: String(e.type)
                     };
 
-                    // Flatten and sanitize additional properties
                     if (e.properties && typeof e.properties === 'object') {
                         for (const [key, value] of Object.entries(e.properties)) {
-                            // Skip null or undefined values
                             if (value == null) continue;
-                            // Convert everything else to string
                             baseProps[`prop_${key}`] = String(value);
                         }
                     }
@@ -183,8 +174,11 @@ IMPORTANT:
                     CREATE (e1)-[r:RELATES_TO {type: rel.type}]->(e2)
                     RETURN count(r) as relationshipCount, count(entityNodes) as entityCount
                 `;
+                this.log('4.6', 'processTextToGraph', 'Full query built successfully');
             } catch (error) {
-                console.warn('Error preparing entity data, falling back to vector-only storage:', error);
+                this.log('WARN', 'processTextToGraph', 'Error preparing entity data, using vector-only storage', {
+                    error: error.message
+                });
                 useSimpleQuery = true;
             }
         } else {
@@ -192,7 +186,7 @@ IMPORTANT:
         }
 
         if (useSimpleQuery) {
-            // Simplified query for chunks with only vector embeddings
+            this.log('4.7', 'processTextToGraph', 'Building simplified vector-only query');
             query = `
                 MATCH (d:Document {documentId: $documentId})
                 CREATE (c:DocumentChunk)
@@ -206,12 +200,10 @@ IMPORTANT:
                 CREATE (d)-[:HAS_CHUNK]->(c)
                 RETURN 0 as relationshipCount, 0 as entityCount
             `;
-            // Reset entities and relationships for the params
             entities = [];
             relationships = [];
         }
 
-        // Prepare parameters
         const params = {
             documentId,
             chunkIndex,
@@ -226,6 +218,12 @@ IMPORTANT:
                 type: String(r.type)
             }))
         };
+
+        this.log('4.8', 'processTextToGraph', 'Query parameters prepared', {
+            queryType: useSimpleQuery ? 'vector-only' : 'full',
+            entityCount: entities.length,
+            relationshipCount: relationships.length
+        });
 
         return { query, params };
     }
@@ -365,22 +363,35 @@ IMPORTANT:
     }
 
     async generateAnswer(question, context) {
-        const prompt = `Based on the following context, answer this question: "${question}"
+        this.log('7', 'generateAnswer', 'Starting answer generation', {
+            question
+        });
 
-Context:
-${context}
+        try {
+            const response = await this.openai.chat.completions.create({
+                model: this.model,
+                messages: [
+                    {
+                        role: "system",
+                        content: "You are a helpful assistant that answers questions based on the provided context. Use only the information from the context to answer questions. If you cannot find the answer in the context, say so."
+                    },
+                    {
+                        role: "user",
+                        content: `Context:\n${context}\n\nQuestion: ${question}\n\nAnswer:`
+                    }
+                ],
+                temperature: 0.7,
+                stream: true
+            });
 
-Provide a clear and concise answer based ONLY on the information provided in the context.`;
-
-        const response = await this.makeOpenAIRequest([
-            {
-                role: "system",
-                content: "You are a helpful assistant that provides accurate answers based on the given context. Only use information from the provided context."
-            },
-            { role: "user", content: prompt }
-        ]);
-
-        return response.choices[0]?.message?.content || 'No answer generated';
+            this.log('7.1', 'generateAnswer', 'Answer generation completed');
+            return response;
+        } catch (error) {
+            this.log('ERROR', 'generateAnswer', 'Error generating answer', {
+                error: error.message
+            });
+            throw error;
+        }
     }
 
     // Add a method to search using vector similarity
@@ -445,18 +456,6 @@ Provide a clear and concise answer based ONLY on the information provided in the
                 )
             `);
 
-            // Create vector index for similarity search
-            await session.run(`
-                CALL gds.vector.createIndex(
-                    'document_chunks',
-                    'DocumentChunk',
-                    ['embedding'],
-                    {
-                        similarity: 'cosine'
-                    }
-                )
-            `);
-
             // Create regular indexes for common lookups
             await session.run(`
                 CREATE INDEX document_chunk_id IF NOT EXISTS
@@ -501,6 +500,80 @@ Provide a clear and concise answer based ONLY on the information provided in the
         } catch (error) {
             console.error('Error getting embedding:', error);
             throw error;
+        }
+    }
+
+    async searchSimilarVectors(embedding, documentIds) {
+        const session = this.driver.session();
+        try {
+            // We'll use a manual dot product calculation for cosine similarity
+            const result = await session.run(`
+                MATCH (c:DocumentChunk)
+                WHERE c.documentId IN $documentIds AND c.embedding IS NOT NULL
+                WITH c, 
+                     reduce(dot = 0.0, i IN range(0, size($embedding)-1) | 
+                        dot + $embedding[i] * c.embedding[i]) /
+                     (sqrt(reduce(norm1 = 0.0, i IN range(0, size($embedding)-1) | 
+                        norm1 + $embedding[i] * $embedding[i])) *
+                      sqrt(reduce(norm2 = 0.0, i IN range(0, size(c.embedding)-1) | 
+                        norm2 + c.embedding[i] * c.embedding[i]))) AS similarity
+                WHERE similarity > 0.7
+                RETURN c.content AS content, similarity AS score
+                ORDER BY similarity DESC
+                LIMIT 5
+            `, {
+                embedding,
+                documentIds
+            });
+
+            return result.records.map(record => ({
+                content: record.get('content'),
+                score: record.get('score')
+            }));
+        } catch (error) {
+            console.error('Error in vector search:', error);
+            // Fallback to empty results if vector search fails
+            return [];
+        } finally {
+            await session.close();
+        }
+    }
+
+    // Add embedding storage during chunk creation
+    async processChunk(chunk, documentId, index) {
+        const session = this.driver.session();
+        try {
+            // Generate embedding for the chunk
+            const embedding = await this.openai.embeddings.create({
+                model: "text-embedding-3-small",
+                input: chunk.content,
+                dimensions: 1536
+            });
+
+            // Store chunk with embedding
+            await session.run(`
+                MATCH (d:Document {documentId: $documentId})
+                CREATE (c:DocumentChunk {
+                    documentId: $documentId,
+                    content: $content,
+                    embedding: $embedding,
+                    index: $index,
+                    created: datetime()
+                })
+                CREATE (d)-[:HAS_CHUNK]->(c)
+            `, {
+                documentId,
+                content: chunk.content,
+                embedding: embedding.data[0].embedding,
+                index
+            });
+
+            return true;
+        } catch (error) {
+            console.error('Error processing chunk:', error);
+            throw error;
+        } finally {
+            await session.close();
         }
     }
 }

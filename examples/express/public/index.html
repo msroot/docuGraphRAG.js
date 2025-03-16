@@ -27,11 +27,33 @@
                         rows="4"
                         required
                     ></textarea>
+                    <div class="error-message" id="scenario-error" style="display: none; color: #dc2626; font-size: 0.85rem; margin-top: 0.5rem;">
+                        Please describe your analysis scenario before proceeding.
+                    </div>
                 </div>
             </div>
             <div class="document-list" id="document-list">
                 <h3>Available Documents</h3>
                 <div id="documents" class="documents-container"></div>
+                <div class="neo4j-query">
+                    <h4>Neo4j Query</h4>
+                    <textarea id="neo4j-query" readonly>
+MATCH (d:Document)-[:HAS_CHUNK]->(c:DocumentChunk)-[:HAS_ENTITY]->(e:Entity)
+WHERE d.documentId IN $documentIds
+WITH c, e
+MATCH (e)-[r:RELATES_TO]->(e2:Entity)
+WHERE (c)-[:HAS_ENTITY]->(e2)
+RETURN *;</textarea>
+                    <div class="neo4j-query-actions">
+                        <button onclick="copyQuery(this)" class="tooltip" data-tooltip="Copy query to clipboard">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                            </svg>
+                            Copy Query
+                        </button>
+                    </div>
+                </div>
             </div>
             <div class="drop-zone" id="drop-zone">
                 <div class="icon" onclick="document.getElementById('pdf-upload').click()">📄</div>
@@ -49,6 +71,16 @@
         
         <div class="main-content">
             <div class="chat-container" id="chat-container"></div>
+            <div class="thinking-container" id="thinking-container" style="display: none;">
+                <div class="thinking-content">
+                    <div class="thinking-dots">
+                        <span></span>
+                        <span></span>
+                        <span></span>
+                    </div>
+                    <p>Thinking...</p>
+                </div>
+            </div>
             <div class="input-container">
                 <input type="text" id="user-input" placeholder="Ask a question about your PDF..." disabled>
                 <button id="mic-button" onclick="toggleMic()" disabled>
@@ -340,6 +372,48 @@
             max-height: 300px;
             overflow-y: auto;
         }
+
+        .thinking-container {
+            padding: 1rem;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .thinking-content {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            padding: 0.75rem 1.5rem;
+            background: #f8f9fa;
+            border-radius: 8px;
+        }
+
+        .thinking-dots {
+            display: flex;
+            gap: 0.25rem;
+        }
+
+        .thinking-dots span {
+            width: 8px;
+            height: 8px;
+            background: #007bff;
+            border-radius: 50%;
+            animation: thinking 1.4s infinite;
+        }
+
+        .thinking-dots span:nth-child(2) {
+            animation-delay: 0.2s;
+        }
+
+        .thinking-dots span:nth-child(3) {
+            animation-delay: 0.4s;
+        }
+
+        @keyframes thinking {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-6px); }
+        }
     </style>
 
     <script>
@@ -558,6 +632,56 @@
                 userInput.placeholder = 'Please select at least one document to chat...';
             } else {
                 userInput.placeholder = 'Ask a question about your selected documents...';
+            }
+
+            // Update Neo4j query with selected document IDs
+            updateNeo4jQuery();
+        }
+
+        function updateNeo4jQuery() {
+            const selectedDocs = Array.from(documents.values())
+                .filter(doc => doc.selected)
+                .map(doc => doc.id);
+
+            const queryTextarea = document.getElementById('neo4j-query');
+            if (selectedDocs.length > 0) {
+                const docIds = selectedDocs.map(id => `"${id}"`).join(', ');
+                queryTextarea.value = `// Performance logging query for document analysis
+CALL apoc.util.log('Starting query execution for documents: ' + [${docIds}]);
+
+// Step 1: Match documents and their chunks
+CALL apoc.util.log('Step 1: Matching documents and chunks')
+MATCH (d:Document)-[:HAS_CHUNK]->(c:DocumentChunk)
+WHERE d.documentId IN [${docIds}]
+WITH c, count(c) as chunk_count
+CALL apoc.util.log('Found ' + chunk_count + ' chunks for selected documents')
+
+// Step 2: Match entities for these chunks
+MATCH (c)-[:HAS_ENTITY]->(e:Entity)
+WITH c, e, count(e) as entity_count
+CALL apoc.util.log('Found ' + entity_count + ' entities for chunks')
+
+// Step 3: Match relationships between entities
+MATCH (e)-[r:RELATES_TO]->(e2:Entity)
+WHERE (c)-[:HAS_ENTITY]->(e2)
+WITH e, e2, r, c, count(r) as rel_count
+CALL apoc.util.log('Found ' + rel_count + ' relationships between entities')
+
+// Step 4: Return detailed results
+RETURN 
+    e.text as source_entity,
+    e.type as source_type,
+    type(r) as relationship,
+    r.context as relationship_context,
+    e2.text as target_entity,
+    e2.type as target_type,
+    c.content as document_context
+ORDER BY source_entity, target_entity;
+
+// Final log
+CALL apoc.util.log('Query execution completed');`;
+            } else {
+                queryTextarea.value = '// Please select documents to view the graph query';
             }
         }
 
