@@ -336,15 +336,7 @@ WHERE d.documentId IN [${docIds}]
 WITH d, c, e
 MATCH (e)-[r:RELATES_TO]->(e2:Entity)
 WHERE (c)-[:HAS_ENTITY]->(e2)
-RETURN DISTINCT
-    d.documentId as document,
-    c.content as chunk_text,
-    e.text as entity1_text,
-    e.type as entity1_type,
-    type(r) as relationship_type,
-    r.context as relationship_context,
-    e2.text as entity2_text,
-    e2.type as entity2_type;`;
+RETURN DISTINCT d, c, e, r, e2`;
             } else {
                 queryTextarea.value = '// Please select documents to view the graph query';
             }
