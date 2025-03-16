@@ -351,25 +351,6 @@ Format your responses using markdown:
 - Use emojis 🎯 to make the response more engaging
 - Structure your response with clear sections when appropriate
 
-For tables, use the following markdown format:
-| Column 1 | Column 2 | Column 3 |
-|----------|----------|----------|
-| Data 1   | Data 2   | Data 3   |
-
-Table styling guidelines:
-- Use tables to present structured data or comparisons
-- Keep column headers clear and concise
-- Align content properly (left for text, right for numbers)
-- Use table dividers (|) and header separators (---)
-- Add spacing around content for readability
-
-Example table:
-| Entity Type | Count | Relevance |
-|-------------|------:|-----------|
-| Person      |     5 | High      |
-| Location    |     3 | Medium    |
-| Date        |     2 | Low       |
-
 Use only the information from the context to answer questions. If you cannot find the answer in the context, say so.`
                     },
                     {
