@@ -88,29 +88,53 @@ export class DocuGraphRAG {
                 model: this.config.openaiModel
             });
 
-            // Initialize GraphTraversal service with the existing driver
-            this.graphTraversal = null; // Temporarily disabled
-            // this.graphTraversal = new GraphTraversalService({
-            //     ...this.config,
-            //     driver: this.driver,
-            //     debug: this.debug
-            // });
+            // Initialize GraphTraversal service
+            this.log('1.4', 'initialize', 'Initializing GraphTraversal service');
+            this.graphTraversal = new GraphTraversalService({
+                driver: this.driver,
+                debug: this.debug,
+                searchLimit: this.config.searchLimit
+            });
 
             // Create basic indexes
-            this.log('1.4', 'initialize', 'Creating Neo4j indexes');
+            this.log('1.5', 'initialize', 'Creating Neo4j indexes');
             const session = this.driver.session();
             try {
+                // Create indexes for Document nodes
                 await session.run(`
-                    CREATE INDEX IF NOT EXISTS FOR (n:Entity)
-                    ON (n.text, n.type, n.documentId)
+                    CREATE INDEX document_id IF NOT EXISTS
+                    FOR (d:Document)
+                    ON (d.documentId)
                 `);
-                this.log('1.5', 'initialize', 'Neo4j indexes created successfully');
+
+                // Create indexes for DocumentChunk nodes
+                await session.run(`
+                    CREATE INDEX chunk_id IF NOT EXISTS
+                    FOR (c:DocumentChunk)
+                    ON (c.documentId, c.chunkId)
+                `);
+
+                // Create indexes for Entity nodes
+                await session.run(`
+                    CREATE INDEX entity_text_type IF NOT EXISTS
+                    FOR (e:Entity)
+                    ON (e.text, e.type)
+                `);
+
+                // Create full-text search index for content
+                await session.run(`
+                    CREATE FULLTEXT INDEX chunk_content IF NOT EXISTS
+                    FOR (c:DocumentChunk)
+                    ON EACH [c.content]
+                `);
+
+                this.log('1.6', 'initialize', 'Neo4j indexes created successfully');
             } finally {
                 await session.close();
             }
 
             this.initialized = true;
-            this.log('1.6', 'initialize', 'DocuGraphRAG initialization completed');
+            this.log('1.7', 'initialize', 'DocuGraphRAG initialization completed');
         } catch (error) {
             this.log('ERROR', 'initialize', 'Failed to initialize DocuGraphRAG', { error: error.message });
             throw error;
@@ -396,26 +420,38 @@ export class DocuGraphRAG {
             this.log('3.1', 'enhancedChat', 'Generating question embedding');
             const questionEmbedding = await this.generateEmbedding(question);
 
-            // Get both vector and text search results
+            // Get vector, text, and graph search results in parallel
             this.log('3.2', 'enhancedChat', 'Starting parallel search');
-            const [vectorResults, textResults] = await Promise.all([
+            const [vectorResults, textResults, graphResults] = await Promise.all([
                 this.llm.searchSimilarVectors(questionEmbedding, documentIds),
-                this.llm.searchSimilarChunks(question, '', documentIds)
+                this.llm.searchSimilarChunks(question, '', documentIds),
+                this.llm.searchGraphRelationships(question, documentIds)
             ]);
 
             this.log('3.3', 'enhancedChat', 'Search completed', {
                 vectorResultsCount: vectorResults.length,
-                textResultsCount: textResults.length
+                textResultsCount: textResults.length,
+                graphResultsCount: graphResults.length
             });
+
+            // Debug logging
+            if (this.debug) {
+                console.log('Vector Results:', vectorResults);
+                console.log('Text Results:', textResults);
+                console.log('Graph Results:', graphResults);
+            }
 
             // Combine and deduplicate results
             const allResults = new Map();
 
-            // Add vector results with their scores
+            // Add vector results
             vectorResults.forEach(result => {
                 allResults.set(result.content, {
                     content: result.content,
-                    score: result.score * 0.6 // Vector results weighted at 60%
+                    score: result.score * 0.4,  // Vector results weighted at 40%
+                    documentId: result.documentId,
+                    entities: [],
+                    relationships: []
                 });
             });
 
@@ -423,38 +459,53 @@ export class DocuGraphRAG {
             textResults.forEach(result => {
                 if (allResults.has(result.content)) {
                     const existing = allResults.get(result.content);
-                    existing.score += result.score * 0.4; // Text results weighted at 40%
+                    existing.score += result.relevance * 0.3;  // Text results weighted at 30%
                 } else {
                     allResults.set(result.content, {
                         content: result.content,
-                        score: result.score * 0.4
+                        score: result.relevance * 0.3,
+                        documentId: result.documentId,
+                        entities: [],
+                        relationships: []
                     });
                 }
             });
 
-            // Convert back to array and sort by score
-            const combinedResults = Array.from(allResults.values())
-                .sort((a, b) => b.score - a.score)
-                .slice(0, 5);
-
-            this.log('3.4', 'enhancedChat', 'Results combined and sorted', {
-                combinedResultsCount: combinedResults.length
+            // Add graph results, combining scores and metadata
+            graphResults.forEach(result => {
+                if (allResults.has(result.chunkContent)) {
+                    const existing = allResults.get(result.chunkContent);
+                    existing.score += result.graphScore * 0.3;  // Graph results weighted at 30%
+                    existing.entities = result.entities || [];
+                    existing.relationships = result.relationships || [];
+                } else {
+                    allResults.set(result.chunkContent, {
+                        content: result.chunkContent,
+                        score: result.graphScore * 0.3,
+                        documentId: result.documentId,
+                        entities: result.entities || [],
+                        relationships: result.relationships || []
+                    });
+                }
             });
 
-            if (combinedResults.length === 0) {
+            // Convert to array and sort by combined score
+            const sortedResults = Array.from(allResults.values())
+                .sort((a, b) => b.score - a.score)
+                .slice(0, 5);  // Keep top 5 results
+
+            this.log('3.4', 'enhancedChat', 'Results combined and sorted', {
+                combinedResultsCount: sortedResults.length
+            });
+
+            if (sortedResults.length === 0) {
                 this.log('3.5', 'enhancedChat', 'No relevant results found');
                 return "I couldn't find any relevant information in the selected documents to answer your question.";
             }
 
-            // Format context with both vector and text results
+            // Format context with both vector, text, and graph results
             this.log('3.6', 'enhancedChat', 'Formatting context for LLM');
-            const formattedContext = this.formatContextForLLM([
-                {
-                    type: 'hybrid_search',
-                    content: combinedResults.map(r => r.content).join('\n\n'),
-                    normalizedScore: 1.0
-                }
-            ]);
+            const formattedContext = this.formatContextForLLM(sortedResults);
 
             // Generate the final answer
             this.log('3.7', 'enhancedChat', 'Generating answer');
