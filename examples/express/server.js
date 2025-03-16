@@ -154,42 +154,8 @@ app.post('/chat', async (req, res) => {
     res.setHeader('Connection', 'keep-alive');
 
     try {
-        // First get the context
-        const searchResults = await docurag.llm.searchSimilarChunks(question, '', documentIds);
-
-        if (!searchResults || searchResults.length === 0) {
-            res.write(`data: ${JSON.stringify({ content: "I couldn't find any relevant information in the selected documents to answer your question." })}\n\n`);
-            res.end();
-            return;
-        }
-
-        // Format context
-        const formattedContext = docurag.formatContextForLLM([
-            {
-                type: 'text',
-                content: searchResults.map(r => r.content).join('\n\n'),
-                normalizedScore: 1.0
-            }
-        ]);
-
-        // Create the messages for the chat completion
-        const messages = [
-            {
-                role: "system",
-                content: "You are a helpful assistant that provides accurate answers based on the given context. Only use information from the provided context."
-            },
-            {
-                role: "user",
-                content: `Based on the following context, answer this question: "${question}"\n\nContext:\n${formattedContext}\n\nProvide a clear and concise answer based ONLY on the information provided in the context.`
-            }
-        ];
-
-        // Stream the response
-        const stream = await docurag.llm.openai.chat.completions.create({
-            model: "gpt-4",
-            messages: messages,
-            stream: true
-        });
+        // Use the main docurag.chat method
+        const stream = await docurag.chat(question, { documentIds });
 
         for await (const chunk of stream) {
             const content = chunk.choices[0]?.delta?.content || '';
