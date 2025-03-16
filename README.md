@@ -1,72 +1,127 @@
-<!-- SystemaAI SophiaAI Delphi-->
+<!-- SystemaJS SophiaAI Delphi-->
 
 
-# 🚀 docuGraphRAG.js [WIP]
+# 🚀 docuGraphRAG.js 
 
-A powerful document analysis tool that combines vector embeddings, graph databases, and language models to create an intelligent document processing and querying system.
+
+📝 A powerful document processing and RAG (Retrieval-Augmented Generation) library that transforms unstructured text from documents into rich knowledge graphs. By leveraging graph databases for enhanced context retrieval, it enables natural conversation with your documents through an intelligent chat interface.
+
+> **⚠️ RESEARCH PURPOSES ONLY**: This project is intended for research and educational purposes. It is not recommended for production use without proper evaluation and modifications.
+
+## 📖 Project Evolution
+
+docuGraphRAG.js is the successor of [docuRAG.js](https://github.com/msroot/docuRAG.js/), representing a significant architectural shift in how we handle document context and relationships:
+
+- Complex relationship patterns can be discovered and queried
+- Entity relationships are explicitly modeled and traversable
+- Multi-hop reasoning becomes possible through graph traversal
+- Better context preservation through relationship metadata
 
 ## Features 🌟
 
-### 1. Hybrid Search System
-Our unique three-layer search approach combines:
-- **Semantic Search** (60% weight): Uses OpenAI embeddings to understand meaning and context
-- **Full-Text Search** (40% weight): Handles exact matches and fuzzy text search
-- **Graph Structure**: Leverages relationships between entities for context-aware results
+### 1. Document Processing
+- Splits documents into manageable chunks
+- Generates vector embeddings for each chunk
+- Stores content in Neo4j for efficient retrieval
 
-### 2. Advanced Graph Traversal 🔍
-- **Path-Based Context**: Finds relevant information through relationship paths
-- **Semantic Subgraphs**: Explores connected information clusters
-- **Knowledge Reasoning**: Performs multi-hop inference across entities
-- **Temporal Analysis**: Discovers time-related connections
-- **Entity Expansion**: Broadens context through related entities
-- **Weighted Paths**: Identifies strongest connection routes
+### 2. Vector Search
+- Semantic understanding using embeddings
+- Find conceptually related content
+- Efficient embedding storage and retrieval
 
-### 3. Intelligent Entity Extraction
-- Automatically identifies entities (People, Organizations, Locations, etc.)
-- Creates relationships between entities
-- Maintains entity properties and metadata
-- Graceful fallback to vector search if entity extraction fails
-
-### 4. Vector Embeddings
-- Uses OpenAI's text-embedding-3-small model
-- Stores embeddings alongside content for semantic search
-- Enables finding similar content even without exact keyword matches
-
-### 5. Graph Database Integration
+### 3. Graph Database Integration
 - Stores documents as connected chunks
-- Maintains relationships between entities
-- Enables complex graph queries
 - Uses Neo4j for efficient graph operations
+- Enables relationship-based retrieval
 
-## Getting Started 🏁
+### 4. Chat Interface
+- Natural language interaction with documents
+- Context-aware responses
+- Streaming response generation
 
-### Prerequisites
+## 🛠️ Prerequisites
+
+- Node.js 18+
+- Neo4j Database
+- OpenAI API Key
+- At least 8GB of free disk space
+
+## 🚀 Quick Start
+
+1. Clone the repository:
 ```bash
-# Install Node.js dependencies
-npm install
-
-# Set up environment variables
-cp .env.example .env
-# Edit .env with your API keys and configuration
+git clone https://github.com/msroot/docuGraphRAG.js.git
+cd docuGraphRAG.js
 ```
 
-### Configuration
+2. Install dependencies:
+```bash
+npm install
+```
+
+3. Create environment file:
+```bash
+# Create a new .env file
+touch .env
+
+# Add the following configuration to your .env file:
+NEO4J_URL=bolt://localhost:7687
+NEO4J_USER=neo4j
+NEO4J_PASSWORD=your-password
+OPENAI_API_KEY=your-openai-key
+```
+
+4. Using Docker (Optional):
+```bash
+# Start Neo4j
+docker-compose up -d neo4j
+
+# Start the application
+docker-compose up app
+```
+
+## ⚙️ Configuration
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| **Required Settings** |
+| `neo4jUrl` | string | - | Neo4j database connection URL |
+| `neo4jUser` | string | - | Neo4j database username |
+| `neo4jPassword` | string | - | Neo4j database password |
+| `openaiApiKey` | string | - | Your OpenAI API key |
+| **Optional Settings** |
+| `chunkSize` | number | 1000 | Size of document chunks in characters |
+| `chunkOverlap` | number | 200 | Overlap between consecutive chunks |
+| `debug` | boolean | true | Enable debug logging |
+
+Example `.env` file:
+```bash
+NEO4J_URL=bolt://localhost:7687
+NEO4J_USER=neo4j
+NEO4J_PASSWORD=your-password
+OPENAI_API_KEY=your-openai-key
+```
+
+Example configuration in code:
 ```javascript
-{
-    apiKey: process.env.OPENAI_API_KEY,
-    model: 'gpt-4',  // or any other OpenAI model
+import { DocuGraphRAG } from 'docugraphrag';
+
+const config = {
     neo4jUrl: process.env.NEO4J_URL,
     neo4jUser: process.env.NEO4J_USER,
     neo4jPassword: process.env.NEO4J_PASSWORD,
-    // Graph traversal settings
-    maxHops: 3,
-    temporalWindow: 7,
-    minConfidence: 0.6,
-    weightDecay: 0.8
-}
+    openaiApiKey: process.env.OPENAI_API_KEY,
+    // Optional settings
+    chunkSize: 1000,
+    chunkOverlap: 200,
+    debug: true
+};
+
+const rag = new DocuGraphRAG(config);
 ```
 
-### Basic Usage
+## 💻 Usage Example
+
 ```javascript
 import { DocuGraphRAG } from 'docugraphrag';
 
@@ -77,8 +132,82 @@ await rag.initialize();
 // Process a document
 const result = await rag.processDocument(text, "Analysis focus description");
 
-// Enhanced chat with advanced context gathering
+// Chat with the document
 const answer = await rag.chat("Who is Dr. Sarah Jones?", { documentId: "doc123" });
+```
+
+## System Architecture 🏗️
+
+```mermaid
+graph TD
+    subgraph Document_Processing ["📄 Document Processing"]
+        DocInput[/"PDF/Text Document"/] --> TextProc["Text Extraction & Cleaning"]
+        TextProc --> Chunking["Smart Chunking"]
+        Chunking -->|"Overlapping chunks"| Chunks[(Processed Chunks)]
+    end
+
+    subgraph Knowledge_Graph_Creation ["🧠 Knowledge Graph Creation"]
+        Chunks --> |"Chunk text"| VectorGen["Vector Embedding Generation"]
+        Chunks --> |"Content analysis"| EntityExt["Entity Extraction"]
+        
+        EntityExt --> |"Named entities"| RelEngine["Relationship Engine"]
+        RelEngine --> |"Entity pairs"| RelCreation["Relationship Creation"]
+        
+        subgraph Neo4j_Storage ["📊 Neo4j Database"]
+            GraphDB[("Neo4j Graph DB")]
+            Indexes["Custom Indexes"]
+            TextIndex["Full-Text Search Index"]
+            GraphDB --> |"Indexed by"| Indexes
+            GraphDB --> |"Text indexing"| TextIndex
+        end
+        
+        VectorGen --> |"Store embeddings"| GraphDB
+        RelCreation --> |"Store relationships"| GraphDB
+        Chunks --> |"Store chunks"| GraphDB
+    end
+
+    subgraph Query_Processing ["🔍 Query Processing"]
+        UserQuery[/"User Question"/] --> QueryEmbed["Query Embedding"]
+        UserQuery --> QueryEntity["Query Entity Recognition"]
+        UserQuery --> TextSearch["Text Search Processing"]
+        
+        subgraph Search_System ["Hybrid Search System"]
+            QueryEmbed --> |"Vector similarity (40%)"| HybridSearch
+            QueryEntity --> |"Entity matching (30%)"| HybridSearch
+            TextSearch --> |"Text matching (30%)"| HybridSearch
+            
+            TextIndex --> |"Full-text results"| TextSearch
+            GraphDB --> |"Graph traversal"| HybridSearch
+            
+            HybridSearch --> |"Ranked & merged results"| ContextFusion
+        end
+        
+        ContextFusion --> |"Combined context"| RespGen["Response Generation"]
+        RespGen --> Answer[/"Final Answer"/]
+    end
+
+    %% Styling
+    classDef input fill:#e3f2fd,stroke:#1565c0,stroke-width:2px;
+    classDef process fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px;
+    classDef database fill:#fff3e0,stroke:#ef6c00,stroke-width:2px;
+    classDef search fill:#f3e5f5,stroke:#6a1b9a,stroke-width:2px;
+    classDef output fill:#fce4ec,stroke:#c2185b,stroke-width:2px;
+    
+    class DocInput,UserQuery input;
+    class TextProc,Chunking,VectorGen,EntityExt,RelEngine,RelCreation,QueryEmbed,QueryEntity,TextSearch process;
+    class GraphDB,Indexes,TextIndex database;
+    class HybridSearch,ContextFusion search;
+    class Answer output;
+
+    %% Subgraph styling
+    style Document_Processing fill:#f8f9fa,stroke:#343a40,stroke-width:2px;
+    style Knowledge_Graph_Creation fill:#f8f9fa,stroke:#343a40,stroke-width:2px;
+    style Query_Processing fill:#f8f9fa,stroke:#343a40,stroke-width:2px;
+    style Neo4j_Storage fill:#fff3e0,stroke:#ef6c00,stroke-width:2px;
+    style Search_System fill:#f3e5f5,stroke:#6a1b9a,stroke-width:2px;
+
+    %% Relationships
+    linkStyle default stroke:#666,stroke-width:2px;
 ```
 
 ## How It Works 🔍
@@ -92,17 +221,14 @@ const answer = await rag.chat("Who is Dr. Sarah Jones?", { documentId: "doc123" 
 ### 2. Advanced Search Process
 When you ask a question:
 1. Converts question to vector embedding
-2. Performs fuzzy full-text search
+2. Performs enhanced text search with word-level scoring
 3. Identifies relevant entities in the question
 4. Explores multiple context gathering strategies:
-   - Vector similarity (30% weight)
-   - Path-based context (20% weight)
-   - Temporal relationships (10% weight)
-   - Knowledge reasoning (20% weight)
-   - Entity context (10% weight)
-   - Entity relationships (10% weight)
+   - Vector similarity (40% weight)
+   - Text matching (30% weight)
+   - Graph relationships (30% weight)
 5. Merges and ranks all contexts
-6. Generates comprehensive answer using GPT-4
+6. Generates comprehensive answer
 
 ### 3. Graph Traversal Algorithms
 - **Path Finding**: Discovers connections between concepts
@@ -121,7 +247,7 @@ When you ask a question:
 ## Advanced Features 🔧
 
 ### Custom Indexes
-- Full-text search index on document content
+- Text search index on document content
 - Vector index for similarity search
 - Regular indexes for common lookups
 - Entity text and type indexing
@@ -143,25 +269,44 @@ When you ask a question:
 ## API Reference 📚
 
 ### Core Methods
-- `processDocument(text, analysisDescription)`
-- `chat(question, options)`
-- `enhancedChat(question, options)`
-- `findPathBasedContext(question, maxHops)`
-- `exploreSemanticSubgraph(startNodeId)`
-- `performKnowledgeReasoning(question, embedding)`
-- `findTemporalContext(date, windowDays)`
-- `expandEntityContext(entityName, maxDepth)`
-- `findWeightedPaths(startEntity, endEntity)`
+- `processDocument(text, analysisDescription)`: Process and index a document
+- `chat(question, options)`: Ask questions about your documents
 
-### Search Parameters
-- Vector similarity weight: 0.3
-- Path-based weight: 0.2
-- Temporal weight: 0.1
-- Reasoning weight: 0.2
-- Entity context weight: 0.1
-- Relationship weight: 0.1
-- Default top K results: 5
-- Fuzzy matching enabled for text search
+## 🔧 Troubleshooting
+
+1. **Neo4j Connection Issues**
+   - Ensure Neo4j is running and accessible
+   - Check connection credentials
+   - Verify network connectivity
+
+2. **Search Issues**
+   - Verify indexes are created properly
+   - Check document processing completed successfully
+   - Ensure sufficient data is loaded
+
+3. **Performance Issues**
+   - Monitor memory usage
+   - Check query execution plans
+   - Optimize index usage
+
+## 📚 Examples
+
+The `examples/` directory contains ready-to-use implementations:
+
+### Express Server Example
+```bash
+cd examples/express
+npm install
+npm start
+```
+Demonstrates a web interface for document chat and visualization.
+
+### Basic Processing Example
+```bash
+cd examples/basic
+npm install
+npm start
+```
 
 ## Contributing 🤝
 
@@ -169,7 +314,7 @@ We welcome contributions! Please check our contributing guidelines for more info
 
 ## License 📄
 
-MIT License - feel free to use in your own projects!
+MIT License 
 
 ## Support 💬
 
