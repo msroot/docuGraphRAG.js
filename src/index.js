@@ -408,25 +408,60 @@ export class DocuGraphRAG {
 
     async chat(question, options = {}) {
         try {
-            this.log('3', 'enhancedChat', 'Starting enhanced chat processing', { question });
-            const { documentIds } = options;
+            this.log('3', 'enhancedChat', 'Starting enhanced chat processing', {
+                question,
+                searchOptions: options.searchOptions
+            });
+
+            const { documentIds, searchOptions = {} } = options;
+            const {
+                vectorSearch = true,
+                textSearch = true,
+                graphSearch = true
+            } = searchOptions;
 
             if (!documentIds || documentIds.length === 0) {
                 this.log('ERROR', 'enhancedChat', 'No documents selected');
                 return "Please select at least one document to search through.";
             }
 
-            // Generate embedding for the question
-            this.log('3.1', 'enhancedChat', 'Generating question embedding');
-            const questionEmbedding = await this.generateEmbedding(question);
+            // Initialize search results
+            let vectorResults = [], textResults = [], graphResults = [];
+            const searchPromises = [];
 
-            // Get vector, text, and graph search results in parallel
-            this.log('3.2', 'enhancedChat', 'Starting parallel search');
-            const [vectorResults, textResults, graphResults] = await Promise.all([
-                this.llm.searchSimilarVectors(questionEmbedding, documentIds),
-                this.llm.searchSimilarChunks(question, '', documentIds),
-                this.llm.searchGraphRelationships(question, documentIds)
-            ]);
+            // Generate embedding for vector search if enabled
+            let questionEmbedding;
+            if (vectorSearch) {
+                this.log('3.1', 'enhancedChat', 'Generating question embedding');
+                questionEmbedding = await this.generateEmbedding(question);
+            }
+
+            // Configure parallel searches based on enabled options
+            this.log('3.2', 'enhancedChat', 'Starting parallel search', { vectorSearch, textSearch, graphSearch });
+
+            if (vectorSearch && questionEmbedding) {
+                searchPromises.push(
+                    this.llm.searchSimilarVectors(questionEmbedding, documentIds)
+                        .then(results => { vectorResults = results; })
+                );
+            }
+
+            if (textSearch) {
+                searchPromises.push(
+                    this.llm.searchSimilarChunks(question, '', documentIds)
+                        .then(results => { textResults = results; })
+                );
+            }
+
+            if (graphSearch) {
+                searchPromises.push(
+                    this.llm.searchGraphRelationships(question, documentIds)
+                        .then(results => { graphResults = results; })
+                );
+            }
+
+            // Wait for all enabled searches to complete
+            await Promise.all(searchPromises);
 
             this.log('3.3', 'enhancedChat', 'Search completed', {
                 vectorResultsCount: vectorResults.length,
@@ -441,53 +476,61 @@ export class DocuGraphRAG {
                 console.log('Graph Results:', graphResults);
             }
 
-            // Combine and deduplicate results
+            // Combine and deduplicate results with dynamic weights
             const allResults = new Map();
+            const activeSearchCount = [vectorSearch, textSearch, graphSearch].filter(Boolean).length;
+            const weightPerSearch = 1 / activeSearchCount;
 
             // Add vector results
-            vectorResults.forEach(result => {
-                allResults.set(result.content, {
-                    content: result.content,
-                    score: result.score * 0.4,  // Vector results weighted at 40%
-                    documentId: result.documentId,
-                    entities: [],
-                    relationships: []
-                });
-            });
-
-            // Add text results, combining scores if content already exists
-            textResults.forEach(result => {
-                if (allResults.has(result.content)) {
-                    const existing = allResults.get(result.content);
-                    existing.score += result.relevance * 0.3;  // Text results weighted at 30%
-                } else {
+            if (vectorSearch) {
+                vectorResults.forEach(result => {
                     allResults.set(result.content, {
                         content: result.content,
-                        score: result.relevance * 0.3,
+                        score: result.score * weightPerSearch,
                         documentId: result.documentId,
                         entities: [],
                         relationships: []
                     });
-                }
-            });
+                });
+            }
 
-            // Add graph results, combining scores and metadata
-            graphResults.forEach(result => {
-                if (allResults.has(result.chunkContent)) {
-                    const existing = allResults.get(result.chunkContent);
-                    existing.score += result.graphScore * 0.3;  // Graph results weighted at 30%
-                    existing.entities = result.entities || [];
-                    existing.relationships = result.relationships || [];
-                } else {
-                    allResults.set(result.chunkContent, {
-                        content: result.chunkContent,
-                        score: result.graphScore * 0.3,
-                        documentId: result.documentId,
-                        entities: result.entities || [],
-                        relationships: result.relationships || []
-                    });
-                }
-            });
+            // Add text results
+            if (textSearch) {
+                textResults.forEach(result => {
+                    if (allResults.has(result.content)) {
+                        const existing = allResults.get(result.content);
+                        existing.score += result.relevance * weightPerSearch;
+                    } else {
+                        allResults.set(result.content, {
+                            content: result.content,
+                            score: result.relevance * weightPerSearch,
+                            documentId: result.documentId,
+                            entities: [],
+                            relationships: []
+                        });
+                    }
+                });
+            }
+
+            // Add graph results
+            if (graphSearch) {
+                graphResults.forEach(result => {
+                    if (allResults.has(result.chunkContent)) {
+                        const existing = allResults.get(result.chunkContent);
+                        existing.score += result.graphScore * weightPerSearch;
+                        existing.entities = result.entities || [];
+                        existing.relationships = result.relationships || [];
+                    } else {
+                        allResults.set(result.chunkContent, {
+                            content: result.chunkContent,
+                            score: result.graphScore * weightPerSearch,
+                            documentId: result.documentId,
+                            entities: result.entities || [],
+                            relationships: result.relationships || []
+                        });
+                    }
+                });
+            }
 
             // Convert to array and sort by combined score
             const sortedResults = Array.from(allResults.values())
@@ -503,7 +546,7 @@ export class DocuGraphRAG {
                 return "I couldn't find any relevant information in the selected documents to answer your question.";
             }
 
-            // Format context with both vector, text, and graph results
+            // Format context with search results
             this.log('3.6', 'enhancedChat', 'Formatting context for LLM');
             const formattedContext = this.formatContextForLLM(sortedResults);
 
@@ -517,7 +560,7 @@ export class DocuGraphRAG {
             this.log('ERROR', 'enhancedChat', 'Error in chat processing', {
                 error: error.message
             });
-            return "I encountered an error while trying to process your question. Please try again.";
+            throw error;
         }
     }
 
