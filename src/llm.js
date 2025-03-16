@@ -230,6 +230,11 @@ IMPORTANT:
 
     async chat(question, options = {}) {
         try {
+            // Show thinking state
+            if (options.onThinking) {
+                options.onThinking("Thinking...");
+            }
+
             // Get combined vector similarity and graph query results
             const query = await this.generateDatabaseQuery(question, options.documentId);
             const session = this.driver.session();
@@ -250,16 +255,16 @@ IMPORTANT:
                 chunks.sort((a, b) => b.similarity - a.similarity);
 
                 chunks.forEach(chunk => {
-                    // Add the chunk content
-                    context += `\nContent (similarity: ${chunk.similarity.toFixed(3)}):\n${chunk.content}\n`;
+                    // Add the chunk content with better formatting
+                    context += `\n📄 **Content** (Relevance: ${(chunk.similarity * 100).toFixed(1)}%)\n${chunk.content}\n`;
 
                     // Add entity information if available
                     if (chunk.entities && chunk.entities.length > 0) {
-                        context += '\nRelevant Entities:\n';
+                        context += '\n🏷️ **Relevant Entities**:\n';
                         chunk.entities.forEach(entity => {
-                            context += `- ${entity.type}: ${entity.text}`;
+                            context += `• ${entity.type}: **${entity.text}**`;
                             if (entity.properties) {
-                                context += ` (${JSON.stringify(entity.properties)})`;
+                                context += ` _(${JSON.stringify(entity.properties)})_`;
                             }
                             context += '\n';
                         });
@@ -267,9 +272,9 @@ IMPORTANT:
 
                     // Add relationship information if available
                     if (chunk.relationships && chunk.relationships.length > 0) {
-                        context += '\nRelationships:\n';
+                        context += '\n🔗 **Relationships**:\n';
                         chunk.relationships.forEach(rel => {
-                            context += `- ${rel.fromEntity} (${rel.fromType}) ${rel.type} ${rel.toEntity} (${rel.toType})\n`;
+                            context += `• **${rel.fromEntity}** (${rel.fromType}) ➜ _${rel.type}_ ➜ **${rel.toEntity}** (${rel.toType})\n`;
                         });
                     }
 
@@ -278,21 +283,60 @@ IMPORTANT:
 
                 // Generate the final answer using the combined context
                 const messages = [
-                    { role: "system", content: "You are a helpful assistant that answers questions based on the provided context. Use both the content and the structured information about entities and relationships to provide accurate answers." },
-                    { role: "user", content: `Context:\n${context}\n\nQuestion: ${question}\n\nProvide a clear and concise answer based on the above context. If the context doesn't contain enough information to answer the question confidently, say so.` }
+                    {
+                        role: "system",
+                        content: `You are a helpful assistant that answers questions based on the provided context. 
+Use both the content and the structured information about entities and relationships to provide accurate answers.
+Format your responses using markdown:
+- Use **bold** for emphasis and important points
+- Use bullet points (•) for lists
+- Use > for quotes or important excerpts
+- Use \`code\` for technical terms or values
+- Use --- for separating sections
+- Use emojis 🎯 to make the response more engaging
+- Structure your response with clear sections when appropriate`
+                    },
+                    {
+                        role: "user",
+                        content: `Context:\n${context}\n\nQuestion: ${question}\n\nProvide a clear and well-formatted answer based on the above context. If the context doesn't contain enough information to answer the question confidently, say so.`
+                    }
                 ];
+
+                // Store the current stream controller
+                let currentController = null;
+
+                // Handle stream interruption
+                const handleInterrupt = () => {
+                    if (currentController) {
+                        currentController.abort();
+                        currentController = null;
+                    }
+                };
+
+                // Set up stream handling
+                if (options.onInterrupt) {
+                    options.onInterrupt(handleInterrupt);
+                }
+
+                // Create abort controller for this stream
+                currentController = new AbortController();
 
                 const response = await this.openai.chat.completions.create({
                     model: this.model,
                     messages: messages,
-                    temperature: 0.7
+                    temperature: 0.7,
+                    stream: true,
+                    signal: currentController.signal
                 });
 
-                return response.choices[0]?.message?.content || 'No answer generated';
+                return response;
             } finally {
                 await session.close();
             }
         } catch (error) {
+            if (error.name === 'AbortError') {
+                return null; // Stream was interrupted
+            }
             console.error('Error in chat:', error);
             throw error;
         }
@@ -368,25 +412,45 @@ IMPORTANT:
         });
 
         try {
+            // Create abort controller for this stream
+            const controller = new AbortController();
+
             const response = await this.openai.chat.completions.create({
                 model: this.model,
                 messages: [
                     {
                         role: "system",
-                        content: "You are a helpful assistant that answers questions based on the provided context. Use only the information from the context to answer questions. If you cannot find the answer in the context, say so."
+                        content: `You are a helpful assistant that answers questions based on the provided context. 
+Format your responses using markdown:
+- Use **bold** for emphasis and important points
+- Use bullet points (•) for lists
+- Use > for quotes or important excerpts
+- Use \`code\` for technical terms or values
+- Use --- for separating sections
+- Use emojis 🎯 to make the response more engaging
+- Structure your response with clear sections when appropriate
+
+Use only the information from the context to answer questions. If you cannot find the answer in the context, say so.`
                     },
                     {
                         role: "user",
-                        content: `Context:\n${context}\n\nQuestion: ${question}\n\nAnswer:`
+                        content: `Context:\n${context}\n\nQuestion: ${question}\n\nProvide a clear and well-formatted answer:`
                     }
                 ],
                 temperature: 0.7,
-                stream: true
+                stream: true,
+                signal: controller.signal
             });
 
             this.log('7.1', 'generateAnswer', 'Answer generation completed');
-            return response;
+            return {
+                response,
+                controller
+            };
         } catch (error) {
+            if (error.name === 'AbortError') {
+                return null; // Stream was interrupted
+            }
             this.log('ERROR', 'generateAnswer', 'Error generating answer', {
                 error: error.message
             });

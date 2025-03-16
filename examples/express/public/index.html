@@ -71,16 +71,6 @@ RETURN *;</textarea>
         
         <div class="main-content">
             <div class="chat-container" id="chat-container"></div>
-            <div class="thinking-container" id="thinking-container" style="display: none;">
-                <div class="thinking-content">
-                    <div class="thinking-dots">
-                        <span></span>
-                        <span></span>
-                        <span></span>
-                    </div>
-                    <p>Thinking...</p>
-                </div>
-            </div>
             <div class="input-container">
                 <input type="text" id="user-input" placeholder="Ask a question about your PDF..." disabled>
                 <button id="mic-button" onclick="toggleMic()" disabled>
@@ -373,46 +363,136 @@ RETURN *;</textarea>
             overflow-y: auto;
         }
 
-        .thinking-container {
+        .message {
             padding: 1rem;
+            margin: 0.5rem 0;
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        .user-message {
+            background: #ffffff;
+        }
+
+        .assistant-message {
+            background: #f7f7f8;
+        }
+
+        .thinking-message {
+            color: #6b7280;
+            font-style: italic;
+        }
+
+        .error-message {
+            color: #dc2626;
+            background: #fee2e2;
+            border: 1px solid #fecaca;
+            padding: 1rem;
+            border-radius: 0.5rem;
+            margin: 0.5rem 0;
+        }
+
+        .chat-container {
+            height: calc(100vh - 180px);
+            overflow-y: auto;
+            padding: 1.5rem;
+            background: #ffffff;
             display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        .message {
+            padding: 0.875rem 1rem;
+            margin: 0;
+            max-width: 85%;
+            line-height: 1.4;
+        }
+
+        .user-message {
+            align-self: flex-end;
+            background: #f3f4f6;
+            border-radius: 1.5rem;
+            color: #000;
+            font-size: 0.95rem;
+        }
+
+        .assistant-message {
+            align-self: flex-start;
+            background: #ffffff;
+            color: #000;
+            font-size: 0.95rem;
+            width: 100%;
+            padding-left: 0;
+        }
+
+        .thinking-message {
+            color: #6b7280;
+            font-style: italic;
+            background: transparent;
+            padding-left: 0;
+            align-self: flex-start;
+        }
+
+        .error-message {
+            color: #dc2626;
+            background: #fee2e2;
+            border: 1px solid #fecaca;
+            padding: 1rem;
+            border-radius: 0.5rem;
+            margin: 0.5rem 0;
+            width: 100%;
+        }
+
+        .main-content {
+            background: #ffffff;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .input-container {
+            padding: 1rem;
+            background: #ffffff;
+            position: sticky;
+            bottom: 0;
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+        }
+
+        #user-input {
+            flex: 1;
+            padding: 0.75rem 1rem;
+            border: 1px solid #e5e7eb;
+            border-radius: 0.5rem;
+            font-size: 0.95rem;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        #user-input:focus {
+            border-color: #3b82f6;
+        }
+
+        #mic-button {
+            padding: 0.75rem;
+            background: none;
+            border: 1px solid #e5e7eb;
+            border-radius: 0.5rem;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
             justify-content: center;
-            align-items: center;
+            transition: all 0.2s;
         }
 
-        .thinking-content {
-            display: flex;
-            align-items: center;
-            gap: 1rem;
-            padding: 0.75rem 1.5rem;
-            background: #f8f9fa;
-            border-radius: 8px;
+        #mic-button:hover {
+            background: #f3f4f6;
         }
 
-        .thinking-dots {
-            display: flex;
-            gap: 0.25rem;
-        }
-
-        .thinking-dots span {
-            width: 8px;
-            height: 8px;
-            background: #007bff;
-            border-radius: 50%;
-            animation: thinking 1.4s infinite;
-        }
-
-        .thinking-dots span:nth-child(2) {
-            animation-delay: 0.2s;
-        }
-
-        .thinking-dots span:nth-child(3) {
-            animation-delay: 0.4s;
-        }
-
-        @keyframes thinking {
-            0%, 100% { transform: translateY(0); }
-            50% { transform: translateY(-6px); }
+        #mic-button.listening {
+            background: #ef4444;
+            color: white;
+            border-color: #ef4444;
         }
     </style>
 
@@ -646,40 +726,39 @@ RETURN *;</textarea>
             const queryTextarea = document.getElementById('neo4j-query');
             if (selectedDocs.length > 0) {
                 const docIds = selectedDocs.map(id => `"${id}"`).join(', ');
-                queryTextarea.value = `// Performance logging query for document analysis
-CALL apoc.util.log('Starting query execution for documents: ' + [${docIds}]);
-
-// Step 1: Match documents and their chunks
-CALL apoc.util.log('Step 1: Matching documents and chunks')
-MATCH (d:Document)-[:HAS_CHUNK]->(c:DocumentChunk)
+                queryTextarea.value = `// Complete Graph Visualization Query
+MATCH (d:Document)
 WHERE d.documentId IN [${docIds}]
-WITH c, count(c) as chunk_count
-CALL apoc.util.log('Found ' + chunk_count + ' chunks for selected documents')
+OPTIONAL MATCH path = (d)-[:HAS_CHUNK]->(c:DocumentChunk)-[:HAS_ENTITY]->(e:Entity)
+OPTIONAL MATCH (e)-[r]->(e2:Entity)
+WHERE e.documentId = e2.documentId 
+  AND e.documentId = d.documentId
 
-// Step 2: Match entities for these chunks
-MATCH (c)-[:HAS_ENTITY]->(e:Entity)
-WITH c, e, count(e) as entity_count
-CALL apoc.util.log('Found ' + entity_count + ' entities for chunks')
-
-// Step 3: Match relationships between entities
-MATCH (e)-[r:RELATES_TO]->(e2:Entity)
-WHERE (c)-[:HAS_ENTITY]->(e2)
-WITH e, e2, r, c, count(r) as rel_count
-CALL apoc.util.log('Found ' + rel_count + ' relationships between entities')
-
-// Step 4: Return detailed results
+// Return full graph with all properties
 RETURN 
-    e.text as source_entity,
-    e.type as source_type,
-    type(r) as relationship,
-    r.context as relationship_context,
-    e2.text as target_entity,
-    e2.type as target_type,
-    c.content as document_context
-ORDER BY source_entity, target_entity;
-
-// Final log
-CALL apoc.util.log('Query execution completed');`;
+    d,
+    c,
+    e {
+        .*,  // All properties of e
+        text: e.text,
+        type: e.type,
+        documentId: e.documentId
+    } as entity1,
+    e2 {
+        .*,  // All properties of e2
+        text: e2.text,
+        type: e2.type,
+        documentId: e2.documentId
+    } as entity2,
+    r {
+        .*,  // All relationship properties
+        type: type(r),
+        context: r.context,
+        confidence: r.confidence,
+        relationship_type: r.relationship_type,  // Specific relationship type from LLM
+        temporal_context: r.temporal_context,    // Any temporal information
+        additional_info: r.additional_info       // Any additional context
+    } as relationship;`;
             } else {
                 queryTextarea.value = '// Please select documents to view the graph query';
             }
@@ -844,14 +923,15 @@ CALL apoc.util.log('Query execution completed');`;
             // Get selected document IDs
             const selectedDocuments = Array.from(document.querySelectorAll('.document-checkbox:checked'))
                 .map(checkbox => checkbox.getAttribute('value'))
-                .filter(id => id); // Filter out any null/undefined values
+                .filter(id => id);
 
             if (selectedDocuments.length === 0) {
                 alert('Please select at least one document');
                 return;
             }
 
-            console.log('Selected documents:', selectedDocuments);
+            // Disable input while processing
+            messageInput.disabled = true;
 
             // Add user message
             const userMessageDiv = document.createElement('div');
@@ -859,12 +939,13 @@ CALL apoc.util.log('Query execution completed');`;
             userMessageDiv.textContent = question;
             chatMessages.appendChild(userMessageDiv);
 
-            // Add assistant message container
-            const assistantMessageDiv = document.createElement('div');
-            assistantMessageDiv.className = 'message assistant-message';
-            chatMessages.appendChild(assistantMessageDiv);
+            // Add thinking message
+            const thinkingDiv = document.createElement('div');
+            thinkingDiv.className = 'message thinking-message';
+            thinkingDiv.textContent = 'Thinking...';
+            chatMessages.appendChild(thinkingDiv);
 
-            // Clear input
+            // Clear input and scroll
             messageInput.value = '';
             chatMessages.scrollTop = chatMessages.scrollHeight;
 
@@ -879,6 +960,14 @@ CALL apoc.util.log('Query execution completed');`;
                         documentIds: selectedDocuments
                     })
                 });
+
+                // Remove thinking message
+                thinkingDiv.remove();
+
+                // Add assistant message container
+                const assistantMessageDiv = document.createElement('div');
+                assistantMessageDiv.className = 'message assistant-message';
+                chatMessages.appendChild(assistantMessageDiv);
 
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder();
@@ -915,10 +1004,22 @@ CALL apoc.util.log('Query execution completed');`;
                 }
             } catch (error) {
                 console.error('Error:', error);
-                assistantMessageDiv.textContent = 'An error occurred while processing your question. Please try again.';
+                // Remove thinking message
+                thinkingDiv.remove();
+                
+                // Show error message
+                const errorDiv = document.createElement('div');
+                errorDiv.className = 'message error-message';
+                errorDiv.innerHTML = `❌ Error: ${error.message}`;
+                chatMessages.appendChild(errorDiv);
+            } finally {
+                // Re-enable input and focus
+                messageInput.disabled = false;
+                messageInput.focus();
+                
+                // Scroll to bottom
+                chatMessages.scrollTop = chatMessages.scrollHeight;
             }
-
-            chatMessages.scrollTop = chatMessages.scrollHeight;
         }
 
         // Clear chat
@@ -1015,6 +1116,115 @@ CALL apoc.util.log('Query execution completed');`;
                 micButton.classList.remove('listening');
             }
         }
+
+        // Add this CSS to style the messages
+        const style = document.createElement('style');
+        style.textContent = `
+            .chat-container {
+                height: calc(100vh - 180px);
+                overflow-y: auto;
+                padding: 1.5rem;
+                background: #ffffff;
+                display: flex;
+                flex-direction: column;
+                gap: 1.5rem;
+            }
+
+            .message {
+                padding: 0.875rem 1rem;
+                margin: 0;
+                max-width: 85%;
+                line-height: 1.4;
+            }
+
+            .user-message {
+                align-self: flex-end;
+                background: #f3f4f6;
+                border-radius: 1.5rem;
+                color: #000;
+                font-size: 0.95rem;
+            }
+
+            .assistant-message {
+                align-self: flex-start;
+                background: #ffffff;
+                color: #000;
+                font-size: 0.95rem;
+                width: 100%;
+                padding-left: 0;
+            }
+
+            .thinking-message {
+                color: #6b7280;
+                font-style: italic;
+                background: transparent;
+                padding-left: 0;
+                align-self: flex-start;
+            }
+
+            .error-message {
+                color: #dc2626;
+                background: #fee2e2;
+                border: 1px solid #fecaca;
+                padding: 1rem;
+                border-radius: 0.5rem;
+                margin: 0.5rem 0;
+                width: 100%;
+            }
+
+            .main-content {
+                background: #ffffff;
+                display: flex;
+                flex-direction: column;
+            }
+
+            .input-container {
+                padding: 1rem;
+                background: #ffffff;
+                position: sticky;
+                bottom: 0;
+                display: flex;
+                gap: 0.5rem;
+                align-items: center;
+            }
+
+            #user-input {
+                flex: 1;
+                padding: 0.75rem 1rem;
+                border: 1px solid #e5e7eb;
+                border-radius: 0.5rem;
+                font-size: 0.95rem;
+                outline: none;
+                transition: border-color 0.2s;
+            }
+
+            #user-input:focus {
+                border-color: #3b82f6;
+            }
+
+            #mic-button {
+                padding: 0.75rem;
+                background: none;
+                border: 1px solid #e5e7eb;
+                border-radius: 0.5rem;
+                cursor: pointer;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                transition: all 0.2s;
+            }
+
+            #mic-button:hover {
+                background: #f3f4f6;
+            }
+
+            #mic-button.listening {
+                background: #ef4444;
+                color: white;
+                border-color: #ef4444;
+            }
+        `;
+        document.head.appendChild(style);
     </script>
 </body>
 </html> 
