@@ -154,13 +154,12 @@ app.post('/chat', async (req, res) => {
     res.setHeader('Connection', 'keep-alive');
 
     try {
-        // Use the main docurag.chat method
         const stream = await docurag.chat(question, { documentIds });
 
+        // Handle each chunk from the stream
         for await (const chunk of stream) {
-            const content = chunk.choices[0]?.delta?.content || '';
-            if (content) {
-                res.write(`data: ${JSON.stringify({ content })}\n\n`);
+            if (chunk.choices && chunk.choices[0]?.delta?.content) {
+                res.write(`data: ${JSON.stringify({ content: chunk.choices[0].delta.content })}\n\n`);
             }
         }
 
@@ -168,7 +167,7 @@ app.post('/chat', async (req, res) => {
         res.end();
     } catch (error) {
         console.error('Error handling chat:', error);
-        res.write(`data: ${JSON.stringify({ error: 'An error occurred while processing your question. Please try again.' })}\n\n`);
+        res.write(`data: ${JSON.stringify({ error: error.message || 'An error occurred while processing your question.' })}\n\n`);
         res.end();
     }
 });
