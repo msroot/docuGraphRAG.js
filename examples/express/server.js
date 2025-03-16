@@ -137,8 +137,12 @@ app.post('/upload', upload.single('pdf'), async (req, res) => {
 });
 
 app.post('/chat', async (req, res) => {
-    const { question, documentIds } = req.body;
-    console.log('Chat request:', { question, documentIds });
+    const { question, documentIds, vectorSearch, textSearch, graphSearch } = req.body;
+    console.log('Chat request:', {
+        question,
+        documentIds,
+        searchOptions: { vectorSearch, textSearch, graphSearch }
+    });
 
     if (!question) {
         return res.json({ success: false, error: 'Question is required' });
@@ -154,7 +158,14 @@ app.post('/chat', async (req, res) => {
     res.setHeader('Connection', 'keep-alive');
 
     try {
-        const stream = await docurag.chat(question, { documentIds });
+        const stream = await docurag.chat(question, {
+            documentIds,
+            searchOptions: {
+                vectorSearch: vectorSearch ?? true,
+                textSearch: textSearch ?? true,
+                graphSearch: graphSearch ?? true
+            }
+        });
 
         // Handle each chunk from the stream
         for await (const chunk of stream) {
