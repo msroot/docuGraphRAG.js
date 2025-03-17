@@ -60,14 +60,6 @@ IMPORTANT:
         this.model = this.config.model;
     }
 
-    log(step, action, message, data = {}) {
-        if (this.debug) {
-            const timestamp = new Date().toISOString();
-            const dataStr = Object.keys(data).length > 0 ? ` | ${Object.entries(data).map(([k, v]) => `${k}=${v}`).join(', ')}` : '';
-            console.log(`[${timestamp}] [LLMService] STEP ${step} - ${action}: ${message}${dataStr}`);
-        }
-    }
-
     async makeOpenAIRequest(messages, options = {}) {
         try {
             const response = await this.openai.chat.completions.create({
@@ -79,19 +71,16 @@ IMPORTANT:
             });
             return response;
         } catch (error) {
-            console.error('[LLMService] OpenAI API error:', error);
             throw error;
         }
     }
 
     async processTextToGraph(text, documentId, chunkIndex, analysisDescription, embedding) {
-
         let entities = [];
         let relationships = [];
         let useSimpleQuery = false;
 
         try {
-            this.log('4.3', 'processTextToGraph', 'Extracting entities and relationships');
             // Try to get entities and relationships from the LLM
             const messages = [
                 { role: "system", content: this.systemPrompt },
@@ -112,23 +101,14 @@ IMPORTANT:
                 const parsedResponse = JSON.parse(content);
                 entities = parsedResponse.entities || [];
                 relationships = parsedResponse.relationships || [];
-                this.log('4.4', 'processTextToGraph', 'Entities and relationships extracted', {
-                    entityCount: entities.length,
-                    relationshipCount: relationships.length,
-                    content
-                });
             }
         } catch (error) {
-            this.log('WARN', 'processTextToGraph', 'Entity extraction failed, using vector embeddings only', {
-                error: error.message
-            });
             useSimpleQuery = true;
         }
 
         let query;
         if (!useSimpleQuery && entities.length > 0) {
             try {
-                this.log('4.5', 'processTextToGraph', 'Building full query with entities');
                 // Validate and sanitize entity properties
                 entities = entities.map(e => {
                     const baseProps = {
@@ -188,11 +168,7 @@ IMPORTANT:
                     ) YIELD rel as r
                     RETURN c, count(r) as relationshipCount, count(entityNodes) as entityCount
                 `;
-                this.log('4.6', 'processTextToGraph', 'Full query built successfully');
             } catch (error) {
-                this.log('WARN', 'processTextToGraph', 'Error preparing entity data, using vector-only storage', {
-                    error: error.message
-                });
                 useSimpleQuery = true;
             }
         } else {
@@ -200,7 +176,6 @@ IMPORTANT:
         }
 
         if (useSimpleQuery) {
-            this.log('4.7', 'processTextToGraph', 'Building simplified vector-only query');
             query = `
                 MATCH (d:Document {documentId: $documentId})
                 MERGE (c:DocumentChunk {documentId: $documentId, chunkIndex: $chunkIndex})
@@ -249,12 +224,6 @@ IMPORTANT:
             }))
         };
 
-        this.log('4.8', 'processTextToGraph', 'Query parameters prepared', {
-            queryType: useSimpleQuery ? 'vector-only' : 'full',
-            entityCount: entities.length,
-            relationshipCount: relationships.length
-        });
-
         return { query, params };
     }
 
@@ -291,7 +260,6 @@ IMPORTANT:
             // Generate the answer using the combined context
             return await this.generateAnswer(question, context);
         } catch (error) {
-            console.error('[LLMService] STEP ERROR - chat:', error);
             throw error;
         }
     }
@@ -355,16 +323,11 @@ IMPORTANT:
 
             return query;
         } catch (error) {
-            console.error('Error generating database query:', error);
             throw error;
         }
     }
 
     async generateAnswer(question, context) {
-        this.log('7', 'generateAnswer', 'Starting answer generation', {
-            question
-        });
-
         try {
             const response = await this.openai.chat.completions.create({
                 model: this.model,
@@ -392,12 +355,8 @@ Use only the information from the context to answer questions. If you cannot fin
                 stream: true
             });
 
-            this.log('7.1', 'generateAnswer', 'Answer generation completed');
             return response;
         } catch (error) {
-            this.log('ERROR', 'generateAnswer', 'Error generating answer', {
-                error: error.message
-            });
             throw error;
         }
     }
@@ -447,7 +406,6 @@ Use only the information from the context to answer questions. If you cannot fin
                 score: record.get('score')
             }));
         } catch (error) {
-            console.error('Error in vector similarity search:', error);
             return [];
         } finally {
             await session.close();
@@ -501,7 +459,6 @@ Use only the information from the context to answer questions. If you cannot fin
             }));
 
         } catch (error) {
-            console.error('Error in text search:', error);
             // Fallback to simple contains search
             try {
                 const fallbackQuery = `
@@ -612,7 +569,7 @@ Use only the information from the context to answer questions. If you cannot fin
                     question
                 });
 
-                const results = result.records.map(record => ({
+                return result.records.map(record => ({
                     content: record.get('content'),
                     documentId: record.get('documentId'),
                     vectorScore: record.get('vectorScore'),
@@ -623,18 +580,10 @@ Use only the information from the context to answer questions. If you cannot fin
                     relationships: record.get('relationships')
                 }));
 
-                this.log('3.3', 'enhancedSearch', 'Search completed', {
-                    resultCount: results.length,
-                    topScore: results[0]?.combinedScore
-                });
-
-                return results;
-
             } finally {
                 await session.close();
             }
         } catch (error) {
-            console.error('Error in enhanced search:', error);
             throw error;
         }
     }
@@ -670,10 +619,7 @@ Use only the information from the context to answer questions. If you cannot fin
                 ON (c.content)
             `);
 
-            this.log('1.4.1', 'createIndexes', 'All indexes created successfully');
-
         } catch (error) {
-            console.error('Error creating indexes:', error);
             throw error;
         } finally {
             await session.close();
@@ -690,7 +636,6 @@ Use only the information from the context to answer questions. If you cannot fin
 
             return embeddingResponse.data[0].embedding;
         } catch (error) {
-            console.error('Error getting embedding:', error);
             throw error;
         }
     }
@@ -715,7 +660,6 @@ Use only the information from the context to answer questions. If you cannot fin
             try {
                 searchEntities = JSON.parse(entityResponse.choices[0].message.content);
             } catch (e) {
-                console.warn('Failed to parse entities from question:', e);
                 searchEntities = [];
             }
 
@@ -790,7 +734,6 @@ Use only the information from the context to answer questions. If you cannot fin
                 };
             });
         } catch (error) {
-            console.error('Error in graph search:', error);
             return [];
         } finally {
             await session.close();
@@ -828,7 +771,6 @@ Use only the information from the context to answer questions. If you cannot fin
 
             return true;
         } catch (error) {
-            console.error('Error processing chunk:', error);
             throw error;
         } finally {
             await session.close();
