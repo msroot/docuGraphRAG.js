@@ -147,31 +147,32 @@ IMPORTANT:
 
                 // Full query with entities and relationships
                 query = `
-                    // First create the document chunk with its embedding
+                    // First create or merge the document chunk with its embedding
                     MATCH (d:Document {documentId: $documentId})
-                    CREATE (c:DocumentChunk)
+                    MERGE (c:DocumentChunk {documentId: $documentId, chunkIndex: $chunkIndex})
                     SET c += {
-                        documentId: $documentId,
-                        chunkIndex: $chunkIndex,
                         content: $text,
                         embedding: $embedding,
-                        hasEntities: true
+                        hasEntities: true,
+                        lastUpdated: datetime()
                     }
-                    CREATE (d)-[:HAS_CHUNK]->(c)
+                    MERGE (d)-[:HAS_CHUNK]->(c)
 
-                    // Then create entities
+                    // Then create or merge entities using APOC
                     WITH c
                     UNWIND $entities as entity
-                    CREATE (e:Entity)
-                    SET e = entity
-                    CREATE (c)-[:HAS_ENTITY]->(e)
+                    CALL apoc.merge.node(['Entity'], 
+                        {text: entity.text, type: entity.type}, 
+                        entity
+                    ) YIELD node
+                    MERGE (c)-[:HAS_ENTITY]->(node)
 
-                    // Finally create relationships
-                    WITH c, collect(e) as entityNodes
+                    // Finally create or merge relationships using APOC
+                    WITH c, collect(node) as entityNodes
                     UNWIND $relationships as rel
                     MATCH (e1:Entity {text: rel.from, type: rel.fromType})<-[:HAS_ENTITY]-(c)
                     MATCH (e2:Entity {text: rel.to, type: rel.toType})<-[:HAS_ENTITY]-(c)
-                    CREATE (e1)-[r:RELATES_TO {type: rel.type}]->(e2)
+                    CALL apoc.merge.relationship(e1, rel.type, {}, {}, e2) YIELD rel as r
                     RETURN count(r) as relationshipCount, count(entityNodes) as entityCount
                 `;
                 this.log('4.6', 'processTextToGraph', 'Full query built successfully');
@@ -189,15 +190,14 @@ IMPORTANT:
             this.log('4.7', 'processTextToGraph', 'Building simplified vector-only query');
             query = `
                 MATCH (d:Document {documentId: $documentId})
-                CREATE (c:DocumentChunk)
+                MERGE (c:DocumentChunk {documentId: $documentId, chunkIndex: $chunkIndex})
                 SET c += {
-                    documentId: $documentId,
-                    chunkIndex: $chunkIndex,
                     content: $text,
                     embedding: $embedding,
-                    hasEntities: false
+                    hasEntities: false,
+                    lastUpdated: datetime()
                 }
-                CREATE (d)-[:HAS_CHUNK]->(c)
+                MERGE (d)-[:HAS_CHUNK]->(c)
                 RETURN 0 as relationshipCount, 0 as entityCount
             `;
             entities = [];
@@ -209,14 +209,35 @@ IMPORTANT:
             chunkIndex,
             text,
             embedding,
-            entities,
-            relationships: relationships.map(r => ({
-                from: String(r.from),
-                fromType: String(r.fromType),
-                to: String(r.to),
-                toType: String(r.toType),
-                type: String(r.type)
-            }))
+            entities: entities.map(e => ({
+                text: String(e.text).trim(),
+                type: String(e.type).trim(),
+                ...Object.fromEntries(
+                    Object.entries(e.properties || {})
+                        .filter(([_, v]) => v != null)
+                        .map(([k, v]) => [`prop_${k}`, String(v).trim()])
+                )
+            })),
+            relationships: relationships.map(r => {
+                const baseRel = {
+                    from: String(r.from).trim(),
+                    fromType: String(r.fromType).trim(),
+                    to: String(r.to).trim(),
+                    toType: String(r.toType).trim(),
+                    type: String(r.type).trim()
+                };
+
+                // Add any additional properties from the relationship
+                if (r.properties && typeof r.properties === 'object') {
+                    for (const [key, value] of Object.entries(r.properties)) {
+                        if (value != null) {
+                            baseRel[`prop_${key}`] = String(value).trim();
+                        }
+                    }
+                }
+
+                return baseRel;
+            })
         };
 
         this.log('4.8', 'processTextToGraph', 'Query parameters prepared', {
