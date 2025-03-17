@@ -150,7 +150,7 @@ export class DocuGraphRAG {
         return uuidv4();
     }
 
-    async processDocument(text, analysisDescription) {
+    async processDocument(text, analysisDescription, fileName) {
         try {
             this.log('2', 'processDocument', 'Starting document processing');
 
@@ -180,6 +180,7 @@ export class DocuGraphRAG {
 
             const metadata = {
                 documentId,
+                fileName,
                 created: new Date().toISOString(),
                 status: 'processing'
             };
@@ -189,7 +190,7 @@ export class DocuGraphRAG {
                 // Create document node with processing status
                 this.log('2.4', 'processDocument', 'Creating document node');
                 await session.run(
-                    'CREATE (d:Document {documentId: $documentId, created: $created, status: $status})',
+                    'CREATE (d:Document {documentId: $documentId, fileName: fileName, created: $created, status: $status})',
                     metadata
                 );
 
@@ -319,49 +320,41 @@ export class DocuGraphRAG {
             }
 
             // Step 3: Always create/update the chunk with text and embedding
-            this.log('5.6', 'extractEntities', 'Creating/updating chunk with text and embedding');
+            this.log('5.6', 'extractEntities', 'Processing chunk with text and embedding');
             const session = this.driver.session();
             try {
-                const query = `
-                    MATCH (d:Document {documentId: $documentId})
-                    MERGE (c:DocumentChunk {documentId: $documentId, chunkId: $chunkId})
-                    SET c += {
-                        content: $text,
-                        embedding: $embedding,
-                        created: datetime(),
-                        hasEntities: $hasEntities,
-                        lastUpdated: datetime()
-                    }
-                    MERGE (d)-[:HAS_CHUNK]->(c)
-                    RETURN c
-                `;
+                const cypherResponse = await this.llm.processTextToGraph(text, documentId, chunkId, analysisDescription, embedding);
 
-                await session.run(query, {
-                    documentId,
-                    chunkId,
-                    text,
-                    embedding,
-                    hasEntities: entityResult.success
-                });
-
-                this.log('5.7', 'extractEntities', 'Chunk processing completed', {
-                    documentId,
-                    chunkId,
-                    hasEmbedding: !!embedding,
-                    hasEntities: entityResult.success
-                });
-
-                return {
-                    ...entityResult,
-                    hasEmbedding: !!embedding,
-                    extractionResults: {
-                        total: entityResult.entitiesCount,
-                        relationships: entityResult.relationshipsCount
-                    }
-                };
+                if (cypherResponse?.query && typeof cypherResponse.query === 'string' && !cypherResponse.query.includes('...')) {
+                    this.log('5.7', 'extractEntities', 'Executing entity extraction query');
+                    const result = await session.run(cypherResponse.query, cypherResponse.params);
+                    const record = result.records[0];
+                    entityResult = {
+                        success: true,
+                        entitiesCount: record?.get('entityCount') || 0,
+                        relationshipsCount: record?.get('relationshipCount') || 0
+                    };
+                    this.log('5.8', 'extractEntities', 'Chunk processing completed', {
+                        documentId,
+                        chunkId,
+                        hasEmbedding: !!embedding,
+                        hasEntities: entityResult.success,
+                        entityCount: entityResult.entitiesCount,
+                        relationshipCount: entityResult.relationshipsCount
+                    });
+                }
             } finally {
                 await session.close();
             }
+
+            return {
+                ...entityResult,
+                hasEmbedding: !!embedding,
+                extractionResults: {
+                    total: entityResult.entitiesCount,
+                    relationships: entityResult.relationshipsCount
+                }
+            };
         } catch (error) {
             this.log('ERROR', 'extractEntities', 'Critical error in chunk processing', {
                 error: error.message,
