@@ -1,5 +1,5 @@
 import neo4j from 'neo4j-driver';
-import { Processor as DocumentProcessor } from './processor.js';
+
 import { LLMService } from './llm.js';
 import { v4 as uuidv4 } from 'uuid';
 import dotenv from 'dotenv';
@@ -44,7 +44,7 @@ export class DocuGraphRAG {
         this.debug = this.config.debug;
         this.initialized = false;
         this.driver = null;
-        this.processor = null;
+
         this.llm = null;
     }
 
@@ -60,10 +60,7 @@ export class DocuGraphRAG {
                 neo4j.auth.basic(this.config.neo4jUser, this.config.neo4jPassword)
             );
 
-            // Initialize document processor
-            this.processor = new DocumentProcessor({
-                debug: this.debug
-            });
+
 
             // Initialize LLM service
             this.llm = new LLMService({
@@ -76,33 +73,13 @@ export class DocuGraphRAG {
             // Create basic indexes
             const session = this.driver.session();
             try {
-                // Create indexes for Document nodes
-                await session.run(`
-                    CREATE INDEX document_id IF NOT EXISTS
-                    FOR (d:Document)
-                    ON (d.documentId)
-                `);
-
-                // Create indexes for DocumentChunk nodes
-                await session.run(`
-                    CREATE INDEX chunk_id IF NOT EXISTS
-                    FOR (c:DocumentChunk)
-                    ON (c.documentId, c.chunkId)
-                `);
-
-                // Create indexes for Entity nodes
-                await session.run(`
-                    CREATE INDEX entity_text_type IF NOT EXISTS
-                    FOR (e:Entity)
-                    ON (e.text, e.type)
-                `);
-
-                // Create full-text search index for content
-                await session.run(`
-                    CREATE FULLTEXT INDEX chunk_content IF NOT EXISTS
-                    FOR (c:DocumentChunk)
-                    ON EACH [c.content]
-                `);
+                // Create indexes within a transaction
+                await session.executeWrite(tx => Promise.all([
+                    tx.run(`CREATE INDEX document_id IF NOT EXISTS FOR (d:Document) ON (d.documentId)`),
+                    tx.run(`CREATE INDEX chunk_id IF NOT EXISTS FOR (c:DocumentChunk) ON (c.documentId, c.chunkId)`),
+                    tx.run(`CREATE INDEX entity_text_type IF NOT EXISTS FOR (e:Entity) ON (e.text, e.type)`),
+                    tx.run(`CREATE FULLTEXT INDEX chunk_content IF NOT EXISTS FOR (c:DocumentChunk) ON EACH [c.content]`)
+                ]));
             } finally {
                 await session.close();
             }

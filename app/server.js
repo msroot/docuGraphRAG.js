@@ -1,11 +1,15 @@
 import express from 'express';
 import multer from 'multer';
-import { DocuGraphRAG } from '../src/index.js';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import neo4j from 'neo4j-driver';
-import pdfParse from 'pdf-parse/lib/pdf-parse.js';
+import { DocuGraphRAG } from '../src/index.js';
+import * as pdfjsLib from 'pdfjs-dist';
+
+// Initialize PDF.js worker
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-dist/build/pdf.worker.mjs';
+
 
 // Get the directory name of the current module
 const __filename = fileURLToPath(import.meta.url);
@@ -29,6 +33,9 @@ const driver = neo4j.driver(
     neo4j.auth.basic(process.env.NEO4J_USER, process.env.NEO4J_PASSWORD)
 );
 
+// Initialize DocuGraphRAG with environment variables
+const docurag = new DocuGraphRAG();
+
 // Configure multer for file uploads
 const upload = multer({
     storage: multer.memoryStorage(),
@@ -45,8 +52,20 @@ const upload = multer({
     }
 });
 
-// Initialize DocuGraphRAG with environment variables
-const docurag = new DocuGraphRAG();
+// Helper function to extract text from PDF
+async function extractTextFromPDF(buffer) {
+    const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
+    let fullText = '';
+
+    for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const textContent = await page.getTextContent();
+        const pageText = textContent.items.map(item => item.str).join(' ');
+        fullText += pageText + '\n';
+    }
+
+    return fullText;
+}
 
 // Get current document
 app.get('/documents', async (req, res) => {
@@ -104,15 +123,12 @@ app.post('/upload', upload.single('pdf'), async (req, res) => {
             scenarioDescription
         });
 
-        // Extract text from PDF using pdf-parse
-        const pdfData = await pdfParse(req.file.buffer);
-        const fullText = pdfData.text;
-
+        // Extract text from PDF using pdfjs-dist
+        const fullText = await extractTextFromPDF(req.file.buffer);
         const fileName = req.file.originalname;
 
         // Process the extracted text
         const result = await docurag.processDocument(fullText, scenarioDescription, fileName);
-
 
         res.json({
             success: true,
@@ -196,8 +212,6 @@ app.post('/cleanup', async (req, res) => {
         });
     }
 });
-
-
 
 // Add delete document endpoint
 app.delete('/documents/:documentId', async (req, res) => {
