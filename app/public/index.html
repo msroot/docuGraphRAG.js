@@ -68,10 +68,16 @@
                     <textarea id="neo4j-query" readonly>
 MATCH (d:Document)-[:HAS_CHUNK]->(c:DocumentChunk)-[:HAS_ENTITY]->(e:Entity)
 WHERE d.documentId IN $documentIds
-WITH c, e
-MATCH (e)-[r:RELATES_TO]->(e2:Entity)
+WITH d, c, e
+MATCH (e)-[r]->(e2:Entity)
 WHERE (c)-[:HAS_ENTITY]->(e2)
-RETURN *;</textarea>
+RETURN DISTINCT 
+    d as document,
+    c as chunk,
+    e as sourceEntity,
+    type(r) as relationshipType,
+    e2 as targetEntity
+                    </textarea>
                     <div class="neo4j-query-actions">
                         <button onclick="copyQuery(this)" class="tooltip" data-tooltip="Copy query to clipboard">
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -355,9 +361,14 @@ RETURN *;</textarea>
 MATCH (d:Document)-[:HAS_CHUNK]->(c:DocumentChunk)-[:HAS_ENTITY]->(e:Entity)
 WHERE d.documentId IN [${docIds}]
 WITH d, c, e
-MATCH (e)-[r:RELATES_TO]->(e2:Entity)
+MATCH (e)-[r]->(e2:Entity)
 WHERE (c)-[:HAS_ENTITY]->(e2)
-RETURN DISTINCT d, c, e, r, e2`;
+RETURN DISTINCT 
+    d as document,
+    c as chunk,
+    e as sourceEntity,
+    type(r) as relationshipType,
+    e2 as targetEntity`;
             } else {
                 queryTextarea.value = '// Please select documents to view the graph query';
             }
