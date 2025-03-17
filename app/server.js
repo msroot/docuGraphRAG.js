@@ -108,24 +108,16 @@ app.post('/upload', upload.single('pdf'), async (req, res) => {
         const pdfData = await pdfParse(req.file.buffer);
         const fullText = pdfData.text;
 
-        // Process the extracted text
-        const result = await docurag.processDocument(fullText, scenarioDescription);
+        const fileName = req.file.originalname;
 
-        // Update document name in Neo4j
-        const session = driver.session();
-        try {
-            await session.run(
-                'MATCH (d:Document {documentId: $documentId}) SET d.name = $name',
-                { documentId: result.documentId, name: req.file.originalname }
-            );
-        } finally {
-            await session.close();
-        }
+        // Process the extracted text
+        const result = await docurag.processDocument(fullText, scenarioDescription, fileName);
+
 
         res.json({
             success: true,
             documentId: result.documentId,
-            name: req.file.originalname
+            name: fileName
         });
     } catch (error) {
         console.error('Error handling document:', error);
