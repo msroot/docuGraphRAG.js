@@ -5,7 +5,6 @@ import { v4 as uuidv4 } from 'uuid';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { GraphTraversalService } from './graphTraversal.js';
 import { RecursiveCharacterTextSplitter } from 'langchain/text_splitter';
 
 // Get the directory name of the current module
@@ -47,7 +46,7 @@ export class DocuGraphRAG {
         this.driver = null;
         this.processor = null;
         this.llm = null;
-        this.graphTraversal = null;
+
     }
 
     log(step, action, message, data = {}) {
@@ -86,14 +85,6 @@ export class DocuGraphRAG {
                 debug: this.debug,
                 apiKey: this.config.openaiApiKey,
                 model: this.config.openaiModel
-            });
-
-            // Initialize GraphTraversal service
-            this.log('1.4', 'initialize', 'Initializing GraphTraversal service');
-            this.graphTraversal = new GraphTraversalService({
-                driver: this.driver,
-                debug: this.debug,
-                searchLimit: this.config.searchLimit
             });
 
             // Create basic indexes
@@ -646,7 +637,7 @@ export class DocuGraphRAG {
             this.initialized = false;
             this.processor = null;
             this.llm = null;
-            this.graphTraversal = null;
+
         }
         return true;
     }
