@@ -114,7 +114,8 @@ IMPORTANT:
                 relationships = parsedResponse.relationships || [];
                 this.log('4.4', 'processTextToGraph', 'Entities and relationships extracted', {
                     entityCount: entities.length,
-                    relationshipCount: relationships.length
+                    relationshipCount: relationships.length,
+                    content
                 });
             }
         } catch (error) {
@@ -135,10 +136,13 @@ IMPORTANT:
                         type: String(e.type)
                     };
 
+                    // Add all properties from the entity
                     if (e.properties && typeof e.properties === 'object') {
                         for (const [key, value] of Object.entries(e.properties)) {
-                            if (value == null) continue;
-                            baseProps[`prop_${key}`] = String(value);
+                            if (value != null) {
+                                baseProps[key] = String(value).trim();
+                                baseProps[`prop_${key}`] = String(value).trim();
+                            }
                         }
                     }
 
@@ -154,11 +158,12 @@ IMPORTANT:
                         content: $text,
                         embedding: $embedding,
                         hasEntities: true,
+                        created: datetime(),
                         lastUpdated: datetime()
                     }
                     MERGE (d)-[:HAS_CHUNK]->(c)
 
-                    // Then create or merge entities using APOC
+                    // Then create or merge entities using APOC with all properties
                     WITH c
                     UNWIND $entities as entity
                     CALL apoc.merge.node(['Entity'], 
@@ -167,13 +172,21 @@ IMPORTANT:
                     ) YIELD node
                     MERGE (c)-[:HAS_ENTITY]->(node)
 
-                    // Finally create or merge relationships using APOC
+                    // Finally create or merge relationships using APOC with all properties
                     WITH c, collect(node) as entityNodes
                     UNWIND $relationships as rel
                     MATCH (e1:Entity {text: rel.from, type: rel.fromType})<-[:HAS_ENTITY]-(c)
                     MATCH (e2:Entity {text: rel.to, type: rel.toType})<-[:HAS_ENTITY]-(c)
-                    CALL apoc.merge.relationship(e1, rel.type, {}, {}, e2) YIELD rel as r
-                    RETURN count(r) as relationshipCount, count(entityNodes) as entityCount
+                    CALL apoc.merge.relationship(e1, rel.type, 
+                        {type: rel.type}, 
+                        {
+                            type: rel.type,
+                            fromType: rel.fromType,
+                            toType: rel.toType
+                        }, 
+                        e2
+                    ) YIELD rel as r
+                    RETURN c, count(r) as relationshipCount, count(entityNodes) as entityCount
                 `;
                 this.log('4.6', 'processTextToGraph', 'Full query built successfully');
             } catch (error) {
@@ -209,35 +222,31 @@ IMPORTANT:
             chunkIndex,
             text,
             embedding,
-            entities: entities.map(e => ({
-                text: String(e.text).trim(),
-                type: String(e.type).trim(),
-                ...Object.fromEntries(
-                    Object.entries(e.properties || {})
-                        .filter(([_, v]) => v != null)
-                        .map(([k, v]) => [`prop_${k}`, String(v).trim()])
-                )
-            })),
-            relationships: relationships.map(r => {
-                const baseRel = {
-                    from: String(r.from).trim(),
-                    fromType: String(r.fromType).trim(),
-                    to: String(r.to).trim(),
-                    toType: String(r.toType).trim(),
-                    type: String(r.type).trim()
+            entities: entities.map(e => {
+                const baseProps = {
+                    text: String(e.text).trim(),
+                    type: String(e.type).trim()
                 };
 
-                // Add any additional properties from the relationship
-                if (r.properties && typeof r.properties === 'object') {
-                    for (const [key, value] of Object.entries(r.properties)) {
+                // Add all properties from the entity
+                if (e.properties && typeof e.properties === 'object') {
+                    for (const [key, value] of Object.entries(e.properties)) {
                         if (value != null) {
-                            baseRel[`prop_${key}`] = String(value).trim();
+                            baseProps[key] = String(value).trim();
+                            baseProps[`prop_${key}`] = String(value).trim();
                         }
                     }
                 }
 
-                return baseRel;
-            })
+                return baseProps;
+            }),
+            relationships: relationships.map(r => ({
+                from: String(r.from).trim(),
+                fromType: String(r.fromType).trim(),
+                to: String(r.to).trim(),
+                toType: String(r.toType).trim(),
+                type: String(r.type).trim()
+            }))
         };
 
         this.log('4.8', 'processTextToGraph', 'Query parameters prepared', {
