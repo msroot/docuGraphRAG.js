@@ -104,6 +104,18 @@ export class DocuGraphRAG {
         }));
     }
 
+    async runQuery(query, params) {
+        const session = this.driver.session();
+        try {
+            const result = await session.run(query, params);
+            return result;
+        } catch (error) {
+            throw error;
+        } finally {
+            await session.close();
+        }
+    }
+
     async processDocument(text, analysisDescription, fileName) {
 
         if (!this.initialized) {
@@ -135,132 +147,81 @@ export class DocuGraphRAG {
         };
 
 
+        await this.runQuery(
+            'CREATE (d:Document {documentId: $documentId, fileName: $fileName, created: $created, status: $status})',
+            metadata
+        );
 
-        try {
+        // Split text into chunks
+        const chunks = await this.splitText(text);
 
-            const session = this.driver.session();
-            // Create document node with processing status
-            await session.run(
-                'CREATE (d:Document {documentId: $documentId, fileName: fileName, created: $created, status: $status})',
-                metadata
-            );
-
-
-            // Split text into chunks
-            const chunks = await this.splitText(text);
-
-            // Process chunks in parallel
-            const chunkPromises = chunks.map(async (chunk, i) => {
-                // Create chunk node and link to document
-                await session.run(`
+        // Process chunks in parallel
+        const chunkPromises = chunks.map(async (chunk, i) => {
+            // Create chunk node and link to document
+            await this.runQuery(`
                         MATCH (d:Document {documentId: $documentId})
-                        CREATE (c:DocumentChunk {documentId: $documentId, content: $content, index: $index, created: $created})
+                        CREATE (c:DocumentChunk {documentId: $documentId, content: $content, index: $index, text: $text, created: $created})
                         CREATE (d)-[:HAS_CHUNK]->(c)
                         `, {
-                    documentId: metadata.documentId,
-                    content: chunk.pageContent,
-                    index: i,
-                    created: new Date().toISOString()
-                });
-
-                // Extract entities after chunk is created
-                try {
-                    const entityResult = await this.extractEntities(chunk.pageContent, i, metadata.documentId, analysisDescription);
-                } catch (error) {
-                    // Update document status to error
-                    await session.run(
-                        'MATCH (d:Document {documentId: $documentId}) SET d.status = $status, d.error = $error',
-                        { documentId: metadata.documentId, status: 'error', error: error.message }
-                    );
-                    throw error;
-                }
+                documentId: metadata.documentId,
+                content: chunk.pageContent,
+                index: i,
+                text: `Chunk ${i}`,
+                created: new Date().toISOString()
             });
 
-            // Wait for all chunks to be processed
-            await Promise.all(chunkPromises);
+            // Extract entities after chunk is created
+            try {
+                const entityResult = await this.extractEntities(chunk.pageContent, i, metadata.documentId, analysisDescription);
+            } catch (error) {
+                // Update document status to error
+                await this.runQuery(
+                    'MATCH (d:Document {documentId: $documentId}) SET d.status = $status, d.error = $error',
+                    { documentId: metadata.documentId, status: 'error', error: error.message }
+                );
+                throw error;
+            }
+        });
 
-            // Update document status to processed
-            await session.run(
-                'MATCH (d:Document {documentId: $documentId}) SET d.status = $status, d.processedAt = datetime()',
-                { documentId: metadata.documentId, status: 'processed' }
-            );
+        // Wait for all chunks to be processed
+        await Promise.all(chunkPromises);
 
-            return { documentId: metadata.documentId, status: 'processed' };
-        } finally {
-            await session.close();
-        }
+        // Update document status to processed
+
+
+        await this.runQuery(
+            'MATCH (d:Document {documentId: $documentId}) SET d.status = $status, d.processedAt = datetime()',
+            { documentId: metadata.documentId, status: 'processed' }
+        );
+
+
+        return { documentId: metadata.documentId, status: 'processed' };
+
 
     }
 
     async extractEntities(text, chunkId, documentId, analysisDescription) {
-        let entityResult = {
-            success: false,
-            entitiesCount: 0,
-            relationshipsCount: 0
-        };
 
-        try {
-            // Step 1: Generate embedding first
-            let embedding;
+
+        // Step 1: Generate embedding first
+        const embedding = await this.llm.generateEmbedding(text);
+
+        // Step 2: Try entity extraction
+
+
+        const cypher = await this.llm.processTextToGraph(text, documentId, chunkId, analysisDescription, embedding);
+
+        if (cypher?.query && typeof cypher.query === 'string' && !cypher.query.includes('...')) {
+
             try {
-                embedding = await this.llm.generateEmbedding(text);
-            } catch (error) {
-                embedding = null;
-            }
+                const session = this.driver.session();
+                await session.run(cypher.query, cypher.params);
 
-            // Step 2: Try entity extraction
-            if (typeof chunkId === 'number' && chunkId >= 0 && documentId) {
-                try {
-                    const cypherResponse = await this.llm.processTextToGraph(text, documentId, chunkId, analysisDescription, embedding);
-
-                    if (cypherResponse?.query && typeof cypherResponse.query === 'string' && !cypherResponse.query.includes('...')) {
-                        const session = this.driver.session();
-                        try {
-                            const result = await session.run(cypherResponse.query, cypherResponse.params);
-                            const record = result.records[0];
-                            entityResult = {
-                                success: true,
-                                entitiesCount: record?.get('entityCount') || 0,
-                                relationshipsCount: record?.get('relationshipCount') || 0
-                            };
-                        } finally {
-                            await session.close();
-                        }
-                    }
-                } catch (error) {
-                    // Continue with simple query
-                }
-            }
-
-            // Step 3: Always create/update the chunk with text and embedding
-            const session = this.driver.session();
-            try {
-                const cypherResponse = await this.llm.processTextToGraph(text, documentId, chunkId, analysisDescription, embedding);
-
-                if (cypherResponse?.query && typeof cypherResponse.query === 'string' && !cypherResponse.query.includes('...')) {
-                    const result = await session.run(cypherResponse.query, cypherResponse.params);
-                    const record = result.records[0];
-                    entityResult = {
-                        success: true,
-                        entitiesCount: record?.get('entityCount') || 0,
-                        relationshipsCount: record?.get('relationshipCount') || 0
-                    };
-                }
             } finally {
                 await session.close();
             }
-
-            return {
-                ...entityResult,
-                hasEmbedding: !!embedding,
-                extractionResults: {
-                    total: entityResult.entitiesCount,
-                    relationships: entityResult.relationshipsCount
-                }
-            };
-        } catch (error) {
-            throw error;
         }
+
     }
 
 
@@ -277,6 +238,8 @@ export class DocuGraphRAG {
             if (!documentIds || documentIds.length === 0) {
                 return "Please select at least one document to search through.";
             }
+
+
 
             // Initialize search results
             let vectorResults = [], textResults = [], graphResults = [];
@@ -317,6 +280,8 @@ export class DocuGraphRAG {
             const allResults = new Map();
             const activeSearchCount = [vectorSearch, textSearch, graphSearch].filter(Boolean).length;
             const weightPerSearch = 1 / activeSearchCount;
+
+
 
             // Add vector results
             if (vectorSearch) {
@@ -386,10 +351,10 @@ export class DocuGraphRAG {
                 relationships: result.relationships || []
             })));
 
-            // Generate the final answer
-            const answer = await this.llm.generateAnswer(question, formattedContext);
 
-            return answer;
+            // Generate the final answer
+            return await this.llm.generateAnswer(question, formattedContext);
+
         } catch (error) {
             throw error;
         }

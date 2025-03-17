@@ -69,7 +69,9 @@ IMPORTANT:
                 stream: options.stream ?? false,
                 ...options
             });
-            return response;
+
+            return response.choices[0]?.message?.content;
+
         } catch (error) {
             throw error;
         }
@@ -90,61 +92,56 @@ IMPORTANT:
     }
 
     async processTextToGraph(text, documentId, chunkIndex, analysisDescription, embedding) {
-        let entities = [];
-        let relationships = [];
-        let useSimpleQuery = false;
 
-        try {
-            // Try to get entities and relationships from the LLM
-            const messages = [
-                { role: "system", content: this.systemPrompt },
-                {
-                    role: "user",
-                    content: `Given this text and analysis focus, extract entities and relationships:\n\nText: ${text}\n\nAnalysis focus: ${analysisDescription}`
-                }
-            ];
-
-            const response = await this.openai.chat.completions.create({
-                model: this.model,
-                messages: messages,
-                temperature: 0
-            });
-
-            const content = response.choices[0]?.message?.content;
-            if (content) {
-                const parsedResponse = JSON.parse(content);
-                entities = parsedResponse.entities || [];
-                relationships = parsedResponse.relationships || [];
+        const messages = [
+            { role: "system", content: this.systemPrompt },
+            {
+                role: "user",
+                content: `Given this text and analysis focus, extract entities and relationships:\n\nText: ${text}\n\nAnalysis focus: ${analysisDescription}`
             }
-        } catch (error) {
-            useSimpleQuery = true;
-        }
+        ];
 
-        let query;
-        if (!useSimpleQuery && entities.length > 0) {
-            try {
-                // Validate and sanitize entity properties
-                entities = entities.map(e => {
-                    const baseProps = {
-                        text: String(e.text),
-                        type: String(e.type)
-                    };
+        const content = await this.makeOpenAIRequest(messages);
 
-                    // Add all properties from the entity
-                    if (e.properties && typeof e.properties === 'object') {
-                        for (const [key, value] of Object.entries(e.properties)) {
-                            if (value != null) {
-                                baseProps[key] = String(value).trim();
-                                baseProps[`prop_${key}`] = String(value).trim();
-                            }
-                        }
+
+
+        const parsedResponse = JSON.parse(content);
+        let entities = parsedResponse.entities || [];
+        let relationships = parsedResponse.relationships || [];
+
+
+
+
+        // Validate and sanitize entity properties
+        entities = entities.map(e => {
+            const baseProps = {
+                text: String(e.text).trim(),
+                type: String(e.type).trim()
+            };
+
+            // Add all properties from the entity
+            if (e.properties && typeof e.properties === 'object') {
+                for (const [key, value] of Object.entries(e.properties)) {
+                    if (value != null) {
+                        baseProps[key] = String(value).trim();
                     }
+                }
+            }
 
-                    return baseProps;
-                });
+            return baseProps;
+        });
 
-                // Full query with entities and relationships
-                query = `
+        relationships = relationships.map(r => ({
+            from: String(r.from).trim(),
+            fromType: String(r.fromType).trim(),
+            to: String(r.to).trim(),
+            toType: String(r.toType).trim(),
+            type: String(r.type).trim()
+        }))
+
+
+        // Full query with entities and relationships
+        const query = `
                     // First create or merge the document chunk with its embedding
                     MATCH (d:Document {documentId: $documentId})
                     MERGE (c:DocumentChunk {documentId: $documentId, chunkIndex: $chunkIndex})
@@ -182,173 +179,34 @@ IMPORTANT:
                     ) YIELD rel as r
                     RETURN c, count(r) as relationshipCount, count(entityNodes) as entityCount
                 `;
-            } catch (error) {
-                useSimpleQuery = true;
-            }
-        } else {
-            useSimpleQuery = true;
-        }
 
-        if (useSimpleQuery) {
-            query = `
-                MATCH (d:Document {documentId: $documentId})
-                MERGE (c:DocumentChunk {documentId: $documentId, chunkIndex: $chunkIndex})
-                SET c += {
-                    content: $text,
-                    embedding: $embedding,
-                    hasEntities: false,
-                    lastUpdated: datetime()
-                }
-                MERGE (d)-[:HAS_CHUNK]->(c)
-                RETURN 0 as relationshipCount, 0 as entityCount
-            `;
-            entities = [];
-            relationships = [];
-        }
+
+
+
 
         const params = {
             documentId,
             chunkIndex,
             text,
             embedding,
-            entities: entities.map(e => {
-                const baseProps = {
-                    text: String(e.text).trim(),
-                    type: String(e.type).trim()
-                };
-
-                // Add all properties from the entity
-                if (e.properties && typeof e.properties === 'object') {
-                    for (const [key, value] of Object.entries(e.properties)) {
-                        if (value != null) {
-                            baseProps[key] = String(value).trim();
-                            baseProps[`prop_${key}`] = String(value).trim();
-                        }
-                    }
-                }
-
-                return baseProps;
-            }),
-            relationships: relationships.map(r => ({
-                from: String(r.from).trim(),
-                fromType: String(r.fromType).trim(),
-                to: String(r.to).trim(),
-                toType: String(r.toType).trim(),
-                type: String(r.type).trim()
-            }))
+            entities,
+            relationships
         };
 
         return { query, params };
     }
 
-    async chat(question, { documentIds }) {
-        try {
-            // Get combined search results
-            const searchResults = await this.enhancedSearch(question, documentIds);
 
-            // Process the results to create a context for the LLM
-            let context = '';
-            searchResults.forEach(result => {
-                // Add the chunk content with scores
-                context += `\n📄 **Content** (Relevance: ${(result.combinedScore * 100).toFixed(1)}%)\n${result.content}\n`;
-
-                // Add entity information if available
-                if (result.entities && result.entities.length > 0) {
-                    context += '\n🏷️ **Relevant Entities**:\n';
-                    result.entities.forEach(entity => {
-                        context += `• ${entity.type}: **${entity.text}**\n`;
-                    });
-                }
-
-                // Add relationship information if available
-                if (result.relationships && result.relationships.length > 0) {
-                    context += '\n🔗 **Relationships**:\n';
-                    result.relationships.forEach(rel => {
-                        context += `• **${rel.from}** ➜ _${rel.type}_ ➜ **${rel.to}**\n`;
-                    });
-                }
-
-                context += '\n---\n';
-            });
-
-            // Generate the answer using the combined context
-            return await this.generateAnswer(question, context);
-        } catch (error) {
-            throw error;
-        }
-    }
-
-    formatChatResponse(records) {
-        let response = {
-            content: [],
-            entities: []
-        };
-
-        records.forEach(record => {
-            const content = record.get('content') || record.get('c.content');
-            if (content) response.content.push(content);
-
-            const entities = record.get('entities');
-            if (entities && Array.isArray(entities)) {
-                response.entities.push(...entities);
-            }
-        });
-
-        return response;
-    }
-
-    async generateDatabaseQuery(question, documentId = null) {
-        try {
-            // First, get similar chunks using vector similarity
-            const { query: vectorQuery, params: vectorParams } = await this.searchSimilarChunks(question, documentId);
-
-            // Then, construct a query that combines vector similarity with entity relationships
-            const query = `
-                // First, get the most similar chunks using vector similarity
-                ${vectorQuery}
-                WITH collect({content: content, documentId: documentId, similarity: similarity}) as similarChunks
-
-                // Then, get entities and relationships from these chunks
-                UNWIND similarChunks as chunk
-                MATCH (d:Document {documentId: chunk.documentId})-[:HAS_CHUNK]->(c:DocumentChunk)
-                WHERE c.content = chunk.content
-                OPTIONAL MATCH (c)-[:HAS_ENTITY]->(e:Entity)
-                OPTIONAL MATCH (e)-[r:RELATES_TO]->(e2:Entity)
-                WHERE (c)-[:HAS_ENTITY]->(e2)
-
-                // Return both content and graph structure
-                RETURN 
-                    chunk.content as content,
-                    chunk.similarity as similarity,
-                    collect(DISTINCT {
-                        text: e.text,
-                        type: e.type,
-                        properties: e.properties
-                    }) as entities,
-                    collect(DISTINCT {
-                        fromEntity: e.text,
-                        fromType: e.type,
-                        toEntity: e2.text,
-                        toType: e2.type,
-                        type: r.type
-                    }) as relationships
-                ORDER BY chunk.similarity DESC
-            `;
-
-            return query;
-        } catch (error) {
-            throw error;
-        }
-    }
 
     async generateAnswer(question, context) {
-        try {
-            const response = await this.openai.chat.completions.create({
-                model: this.model,
-                messages: [
-                    {
-                        role: "system",
-                        content: `You are a helpful assistant that answers questions based on the provided context. 
+
+
+        const response = await this.openai.chat.completions.create({
+            model: this.model,
+            messages: [
+                {
+                    role: "system",
+                    content: `You are a helpful assistant that answers questions based on the provided context. 
 Format your responses using markdown:
 - Use **bold** for emphasis and important points
 - Use bullet points (•) for lists
@@ -359,20 +217,17 @@ Format your responses using markdown:
 - Structure your response with clear sections when appropriate
 
 Use only the information from the context to answer questions. If you cannot find the answer in the context, say so.`
-                    },
-                    {
-                        role: "user",
-                        content: `Context:\n${context}\n\nQuestion: ${question}\n\nProvide a clear and well-formatted answer:`
-                    }
-                ],
-                temperature: 0.7,
-                stream: true
-            });
+                },
+                {
+                    role: "user",
+                    content: `Context:\n${context}\n\nQuestion: ${question}\n\nProvide a clear and well-formatted answer:`
+                }
+            ],
+            temperature: 0.7,
+            stream: true
+        });
+        return response;
 
-            return response;
-        } catch (error) {
-            throw error;
-        }
     }
 
     // Add a method to search using vector similarity
@@ -601,38 +456,11 @@ Use only the information from the context to answer questions. If you cannot fin
             throw error;
         }
     }
-
-    // Remove redundant methods that are now combined in enhancedSearch
-    async createIndexes() {
+    async runQuery(query, params) {
         const session = this.driver.session();
         try {
-            // Create regular indexes for common lookups
-            await session.run(`
-                CREATE INDEX document_chunk_id IF NOT EXISTS
-                FOR (c:DocumentChunk)
-                ON (c.documentId)
-            `);
-
-            await session.run(`
-                CREATE INDEX entity_text_type IF NOT EXISTS
-                FOR (e:Entity)
-                ON (e.text, e.type)
-            `);
-
-            // Create index for embeddings
-            await session.run(`
-                CREATE INDEX document_chunk_embedding IF NOT EXISTS
-                FOR (c:DocumentChunk)
-                ON (c.embedding)
-            `);
-
-            // Create text search index on content
-            await session.run(`
-                CREATE TEXT INDEX document_chunk_content IF NOT EXISTS
-                FOR (c:DocumentChunk)
-                ON (c.content)
-            `);
-
+            const result = await session.run(query, params);
+            return result;
         } catch (error) {
             throw error;
         } finally {
@@ -655,34 +483,25 @@ Use only the information from the context to answer questions. If you cannot fin
     }
 
     async searchGraphRelationships(question, documentIds) {
-        const session = this.driver.session();
-        try {
-            // First, extract key entities from the question using OpenAI
-            const entityResponse = await this.openai.chat.completions.create({
-                model: "gpt-4",
-                messages: [{
-                    role: "system",
-                    content: "Extract key entities from the question. Return ONLY a JSON array of strings with the entity names. Example: ['John Smith', 'Microsoft']"
-                }, {
-                    role: "user",
-                    content: question
-                }],
-                temperature: 0
-            });
 
-            let searchEntities = [];
-            try {
-                searchEntities = JSON.parse(entityResponse.choices[0].message.content);
-            } catch (e) {
-                searchEntities = [];
-            }
+        // First, extract key entities from the question using OpenAI
+        const entityResponse = await this.openai.chat.completions.create({
+            model: "gpt-4",
+            messages: [{
+                role: "system",
+                content: "Extract key entities from the question. Return ONLY a JSON array of strings with the entity names. Example: ['John Smith', 'Microsoft']"
+            }, {
+                role: "user",
+                content: question
+            }],
+            temperature: 0
+        });
 
-            if (searchEntities.length === 0) {
-                return [];
-            }
+        let searchEntities = JSON.parse(entityResponse.choices[0].message.content);
 
-            // Build a Cypher query that finds paths between entities and through relevant chunks
-            const query = `
+
+        // Build a Cypher query that finds paths between entities and through relevant chunks
+        const query = `
                 // Match documents within scope
                 MATCH (d:Document)
                 WHERE d.documentId IN $documentIds
@@ -733,61 +552,18 @@ Use only the information from the context to answer questions. If you cannot fin
                     }]
                 } as result`;
 
-            const result = await session.run(query, {
-                documentIds,
-                searchEntities
-            });
 
-            return result.records.map(record => {
-                const res = record.get('result');
-                return {
-                    chunkContent: res.chunkContent,
-                    graphScore: res.score,
-                    entities: res.entities,
-                    relationships: res.relationships
-                };
-            });
-        } catch (error) {
-            return [];
-        } finally {
-            await session.close();
-        }
+        const result = await this.runQuery(query, {
+            documentIds,
+            searchEntities
+        });
+
+        return result.records.map(record => {
+            return record.get('result');
+
+        });
+
     }
 
-    // Add embedding storage during chunk creation
-    async processChunk(chunk, documentId, index) {
-        const session = this.driver.session();
-        try {
-            // Generate embedding for the chunk
-            const embedding = await this.openai.embeddings.create({
-                model: "text-embedding-3-small",
-                input: chunk.content,
-                dimensions: 1536
-            });
 
-            // Store chunk with embedding
-            await session.run(`
-                MATCH (d:Document {documentId: $documentId})
-                CREATE (c:DocumentChunk {
-                    documentId: $documentId,
-                    content: $content,
-                    embedding: $embedding,
-                    index: $index,
-                    created: datetime()
-                })
-                CREATE (d)-[:HAS_CHUNK]->(c)
-            `, {
-                documentId,
-                content: chunk.content,
-                embedding: embedding.data[0].embedding,
-                index
-            });
-
-            return true;
-        } catch (error) {
-            throw error;
-        } finally {
-            await session.close();
-        }
-    }
 }
