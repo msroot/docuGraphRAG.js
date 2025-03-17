@@ -75,6 +75,20 @@ IMPORTANT:
         }
     }
 
+    async generateEmbedding(text) {
+        try {
+            const response = await this.openai.embeddings.create({
+                model: "text-embedding-3-small",
+                input: text,
+                dimensions: 1536
+            });
+
+            return response.data[0].embedding;
+        } catch (error) {
+            throw error;
+        }
+    }
+
     async processTextToGraph(text, documentId, chunkIndex, analysisDescription, embedding) {
         let entities = [];
         let relationships = [];

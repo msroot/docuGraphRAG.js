@@ -8,7 +8,10 @@ import { DocuGraphRAG } from '../src/index.js';
 import * as pdfjsLib from 'pdfjs-dist';
 
 // Initialize PDF.js worker
-pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-dist/build/pdf.worker.mjs';
+pdfjsLib.GlobalWorkerOptions.workerSrc = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    '../node_modules/pdfjs-dist/build/pdf.worker.mjs'
+);
 
 
 // Get the directory name of the current module
@@ -54,7 +57,9 @@ const upload = multer({
 
 // Helper function to extract text from PDF
 async function extractTextFromPDF(buffer) {
-    const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
+    // Convert Buffer to Uint8Array
+    const uint8Array = new Uint8Array(buffer);
+    const pdf = await pdfjsLib.getDocument({ data: uint8Array }).promise;
     let fullText = '';
 
     for (let i = 1; i <= pdf.numPages; i++) {

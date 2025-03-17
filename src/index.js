@@ -105,89 +105,91 @@ export class DocuGraphRAG {
     }
 
     async processDocument(text, analysisDescription, fileName) {
+
+        if (!this.initialized) {
+            await this.initialize();
+        }
+
+        // Validate and convert text input
+        if (!text) {
+            throw new Error('Text content is required');
+        }
+
+        // Convert Buffer to string if needed
+        if (Buffer.isBuffer(text)) {
+            text = text.toString('utf-8');
+        }
+
+        // Ensure text is a string
+        if (typeof text !== 'string') {
+            throw new Error('Text content must be a string or Buffer');
+        }
+
+        const documentId = uuidv4();
+
+        const metadata = {
+            documentId,
+            fileName,
+            created: new Date().toISOString(),
+            status: 'processing'
+        };
+
+
+
         try {
-            if (!this.initialized) {
-                await this.initialize();
-            }
-
-            // Validate and convert text input
-            if (!text) {
-                throw new Error('Text content is required');
-            }
-
-            // Convert Buffer to string if needed
-            if (Buffer.isBuffer(text)) {
-                text = text.toString('utf-8');
-            }
-
-            // Ensure text is a string
-            if (typeof text !== 'string') {
-                throw new Error('Text content must be a string or Buffer');
-            }
-
-            const documentId = uuidv4();
-
-            const metadata = {
-                documentId,
-                fileName,
-                created: new Date().toISOString(),
-                status: 'processing'
-            };
 
             const session = this.driver.session();
-            try {
-                // Create document node with processing status
-                await session.run(
-                    'CREATE (d:Document {documentId: $documentId, fileName: fileName, created: $created, status: $status})',
-                    metadata
-                );
+            // Create document node with processing status
+            await session.run(
+                'CREATE (d:Document {documentId: $documentId, fileName: fileName, created: $created, status: $status})',
+                metadata
+            );
 
-                // Split text into chunks
-                const chunks = await this.splitText(text);
 
-                // Process chunks in parallel
-                const chunkPromises = chunks.map(async (chunk, i) => {
-                    // Create chunk node and link to document
-                    await session.run(`
+            // Split text into chunks
+            const chunks = await this.splitText(text);
+
+            // Process chunks in parallel
+            const chunkPromises = chunks.map(async (chunk, i) => {
+                // Create chunk node and link to document
+                await session.run(`
                         MATCH (d:Document {documentId: $documentId})
                         CREATE (c:DocumentChunk {documentId: $documentId, content: $content, index: $index, created: $created})
                         CREATE (d)-[:HAS_CHUNK]->(c)
                         `, {
-                        documentId: metadata.documentId,
-                        content: chunk.pageContent,
-                        index: i,
-                        created: new Date().toISOString()
-                    });
-
-                    // Extract entities after chunk is created
-                    try {
-                        const entityResult = await this.extractEntities(chunk.pageContent, i, metadata.documentId, analysisDescription);
-                    } catch (error) {
-                        // Update document status to error
-                        await session.run(
-                            'MATCH (d:Document {documentId: $documentId}) SET d.status = $status, d.error = $error',
-                            { documentId: metadata.documentId, status: 'error', error: error.message }
-                        );
-                        throw error;
-                    }
+                    documentId: metadata.documentId,
+                    content: chunk.pageContent,
+                    index: i,
+                    created: new Date().toISOString()
                 });
 
-                // Wait for all chunks to be processed
-                await Promise.all(chunkPromises);
+                // Extract entities after chunk is created
+                try {
+                    const entityResult = await this.extractEntities(chunk.pageContent, i, metadata.documentId, analysisDescription);
+                } catch (error) {
+                    // Update document status to error
+                    await session.run(
+                        'MATCH (d:Document {documentId: $documentId}) SET d.status = $status, d.error = $error',
+                        { documentId: metadata.documentId, status: 'error', error: error.message }
+                    );
+                    throw error;
+                }
+            });
 
-                // Update document status to processed
-                await session.run(
-                    'MATCH (d:Document {documentId: $documentId}) SET d.status = $status, d.processedAt = datetime()',
-                    { documentId: metadata.documentId, status: 'processed' }
-                );
+            // Wait for all chunks to be processed
+            await Promise.all(chunkPromises);
 
-                return { documentId: metadata.documentId, status: 'processed' };
-            } finally {
-                await session.close();
-            }
-        } catch (error) {
-            throw error;
+            // Update document status to processed
+            await session.run(
+                'MATCH (d:Document {documentId: $documentId}) SET d.status = $status, d.processedAt = datetime()',
+                { documentId: metadata.documentId, status: 'processed' }
+            );
+
+            return { documentId: metadata.documentId, status: 'processed' };
+        } finally {
+            await session.close();
         }
+
     }
 
     async extractEntities(text, chunkId, documentId, analysisDescription) {
@@ -201,7 +203,7 @@ export class DocuGraphRAG {
             // Step 1: Generate embedding first
             let embedding;
             try {
-                embedding = await this.generateEmbedding(text);
+                embedding = await this.llm.generateEmbedding(text);
             } catch (error) {
                 embedding = null;
             }
@@ -261,19 +263,7 @@ export class DocuGraphRAG {
         }
     }
 
-    async generateEmbedding(text) {
-        try {
-            const response = await this.llm.openai.embeddings.create({
-                model: "text-embedding-3-small",
-                input: text,
-                dimensions: 1536
-            });
 
-            return response.data[0].embedding;
-        } catch (error) {
-            throw error;
-        }
-    }
 
     async chat(question, options = {}) {
         try {
@@ -295,7 +285,7 @@ export class DocuGraphRAG {
             // Generate embedding for vector search if enabled
             let questionEmbedding;
             if (vectorSearch) {
-                questionEmbedding = await this.generateEmbedding(question);
+                questionEmbedding = await this.llm.generateEmbedding(question);
             }
 
             // Configure parallel searches based on enabled options
@@ -405,27 +395,7 @@ export class DocuGraphRAG {
         }
     }
 
-    async findEntitiesInQuestion(question, documentFilter = '', documentIds = []) {
-        const session = this.driver.session();
-        try {
-            const result = await session.run(`
-                MATCH (e:Entity)<-[:HAS_ENTITY]-(c:DocumentChunk)
-                WHERE (toLower(e.text) IN [word IN split(toLower($question), ' ') | word]
-                   OR toLower($question) CONTAINS toLower(e.text))
-                   ${documentFilter}
-                RETURN DISTINCT e
-                ORDER BY size(e.text) DESC
-                LIMIT 5
-            `, {
-                question,
-                documentIds
-            });
 
-            return result.records.map(record => record.get('e').properties);
-        } finally {
-            await session.close();
-        }
-    }
 
     formatContextForLLM(mergedContext) {
         let formattedContext = '';
