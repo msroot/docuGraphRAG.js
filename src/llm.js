@@ -60,7 +60,7 @@ IMPORTANT:
         this.model = this.config.model;
     }
 
-    async makeOpenAIRequest(messages, options = {}) {
+    async makeOpenAIRequest(messages = [], options = {}) {
         try {
             const response = await this.openai.chat.completions.create({
                 model: "gpt-4",
@@ -359,103 +359,6 @@ Use only the information from the context to answer questions. If you cannot fin
         }
     }
 
-    async enhancedSearch(question, documentIds) {
-        try {
-            // Generate embedding for the question
-            const questionEmbedding = await this.getEmbedding(question);
-            const session = this.driver.session();
-
-            try {
-                // Single query combining vector, text, and graph search
-                const query = `
-                    // Match chunks from specified documents
-                    MATCH (c:DocumentChunk)
-                    WHERE c.documentId IN $documentIds
-                      AND c.embedding IS NOT NULL
-
-                    // Calculate vector similarity
-                    WITH c, gds.similarity.cosine(c.embedding, $embedding) AS vectorScore
-
-                    // Add text matching score
-                    WITH c, vectorScore,
-                         CASE 
-                            WHEN toLower(c.content) CONTAINS toLower($question) 
-                            THEN toFloat(size(split(toLower(c.content), toLower($question))) - 1) / size(split(c.content, ' '))
-                            ELSE 0 
-                         END AS textScore
-
-                    // Get entities and relationships
-                    OPTIONAL MATCH (c)-[:HAS_ENTITY]->(e:Entity)
-                    OPTIONAL MATCH (e)-[r:RELATES_TO]->(related:Entity)
-                    WHERE (c)-[:HAS_ENTITY]->(related)
-
-                    // Calculate graph relevance score
-                    WITH c, vectorScore, textScore,
-                         collect(DISTINCT e) as entities,
-                         collect(DISTINCT r) as relationships,
-                         CASE 
-                            WHEN size(collect(DISTINCT e)) > 0 
-                            THEN toFloat(size(collect(DISTINCT r))) / size(collect(DISTINCT e))
-                            ELSE 0 
-                         END AS graphScore
-
-                    // Calculate combined score
-                    WITH c, 
-                         vectorScore * 0.4 + 
-                         textScore * 0.3 + 
-                         graphScore * 0.3 AS combinedScore,
-                         vectorScore, textScore, graphScore,
-                         entities, relationships
-                    WHERE combinedScore > 0.3
-
-                    // Return results
-                    RETURN 
-                        c.content as content,
-                        c.documentId as documentId,
-                        vectorScore,
-                        textScore,
-                        graphScore,
-                        combinedScore,
-                        [e IN entities | {
-                            text: e.text,
-                            type: e.type,
-                            properties: e.properties
-                        }] as entities,
-                        [r IN relationships | {
-                            from: startNode(r).text,
-                            fromType: startNode(r).type,
-                            to: endNode(r).text,
-                            toType: endNode(r).type,
-                            type: type(r)
-                        }] as relationships
-                    ORDER BY combinedScore DESC
-                    LIMIT 5
-                `;
-
-                const result = await session.run(query, {
-                    documentIds,
-                    embedding: questionEmbedding,
-                    question
-                });
-
-                return result.records.map(record => ({
-                    content: record.get('content'),
-                    documentId: record.get('documentId'),
-                    vectorScore: record.get('vectorScore'),
-                    textScore: record.get('textScore'),
-                    graphScore: record.get('graphScore'),
-                    combinedScore: record.get('combinedScore'),
-                    entities: record.get('entities'),
-                    relationships: record.get('relationships')
-                }));
-
-            } finally {
-                await session.close();
-            }
-        } catch (error) {
-            throw error;
-        }
-    }
     async runQuery(query, params) {
         const session = this.driver.session();
         try {
@@ -483,22 +386,29 @@ Use only the information from the context to answer questions. If you cannot fin
     }
 
     async searchGraphRelationships(question, documentIds) {
-
         // First, extract key entities from the question using OpenAI
-        const entityResponse = await this.openai.chat.completions.create({
-            model: "gpt-4",
-            messages: [{
-                role: "system",
-                content: "Extract key entities from the question. Return ONLY a JSON array of strings with the entity names. Example: ['John Smith', 'Microsoft']"
-            }, {
-                role: "user",
-                content: question
-            }],
-            temperature: 0
-        });
+        const messages = [{
+            role: "system", content: "Extract key entities from the question. Return ONLY a JSON array of strings with the entity names. Example: ['John Smith', 'Microsoft']"
+        }, { role: "user", content: question }]
 
-        let searchEntities = JSON.parse(entityResponse.choices[0].message.content);
+        const entityResponse = await this.makeOpenAIRequest(messages, { temperature: 0 });
 
+        // Parse the response content directly since makeOpenAIRequest already returns the content
+        let searchEntities = JSON.parse(entityResponse);
+        console.log('Search entities:', searchEntities);
+
+        // // First, let's see what entities we have in the database
+        // const debugQuery = `
+        //     MATCH (e:Entity)
+        //     RETURN e.text, e.type, e.documentId
+        //     LIMIT 10
+        // `;
+        // const debugResult = await this.runQuery(debugQuery);
+        // console.log('All entities in database:', debugResult.records.map(r => ({
+        //     text: r.get('e.text'),
+        //     type: r.get('e.type'),
+        //     documentId: r.get('e.documentId')
+        // })));
 
         // Build a Cypher query that finds paths between entities and through relevant chunks
         const query = `
@@ -509,24 +419,33 @@ Use only the information from the context to answer questions. If you cannot fin
                 
                 // Find chunks that contain our search entities
                 MATCH (d)-[:HAS_CHUNK]->(c:DocumentChunk)-[:HAS_ENTITY]->(e:Entity)
-                WHERE any(searchTerm IN $searchEntities WHERE toLower(e.text) CONTAINS toLower(searchTerm))
+                WHERE any(searchTerm IN $searchEntities 
+                    WHERE toLower(e.text) = toLower(searchTerm) 
+                    OR toLower(e.text) CONTAINS toLower(searchTerm)
+                    OR toLower(searchTerm) CONTAINS toLower(e.text))
                 
-                // Find paths between entities in these chunks
-                WITH c, collect(e) as startEntities
-                UNWIND startEntities as start
-                MATCH path = (start)-[:RELATES_TO*1..3]-(related:Entity)
-                WHERE all(r IN relationships(path) WHERE startNode(r).documentId = endNode(r).documentId)
+                // Get the chunk content and matching entities
+                WITH c, collect(e) as matchingEntities
                 
-                // Score the paths based on length and relevance
+                // For each matching entity, find related entities through relationships
+                UNWIND matchingEntities as me
+                MATCH path = (me)-[:RELATES_TO*0..3]-(related:Entity)
+                
+                // Get the chunk content and path information
+                WITH c, path, me, related
+                
+                // Calculate relevance score based on path length and entity matches
                 WITH c, path,
                      size(relationships(path)) as pathLength,
-                     [n IN nodes(path) WHERE n:Entity | n.text] as entityTexts
+                     [node IN nodes(path) WHERE node:Entity | node.text] as entityTexts
                 
                 // Calculate a relevance score
                 WITH c, path, pathLength,
-                     1.0 / pathLength as pathScore,
+                     1.0 / (pathLength + 1) as pathScore,
                      size([x IN entityTexts WHERE any(term IN $searchEntities 
-                          WHERE toLower(x) CONTAINS toLower(term))]) as matchCount
+                          WHERE toLower(x) = toLower(term)
+                          OR toLower(x) CONTAINS toLower(term)
+                          OR toLower(term) CONTAINS toLower(x))]) as matchCount
                 
                 // Combine scores and return results
                 WITH c, path,
@@ -552,17 +471,14 @@ Use only the information from the context to answer questions. If you cannot fin
                     }]
                 } as result`;
 
-
         const result = await this.runQuery(query, {
             documentIds,
             searchEntities
         });
 
-        return result.records.map(record => {
-            return record.get('result');
-
-        });
-
+        const data = result.records.map(record => record.get('result'));
+        // console.log('Query results:', JSON.stringify(data, null, 2));
+        return data;
     }
 
 
