@@ -127,10 +127,6 @@ export class DocuGraphRAG {
         }));
     }
 
-    generateUUID() {
-        return uuidv4();
-    }
-
     async processDocument(text, analysisDescription, fileName) {
         try {
             if (!this.initialized) {
@@ -152,7 +148,7 @@ export class DocuGraphRAG {
                 throw new Error('Text content must be a string or Buffer');
             }
 
-            const documentId = this.generateUUID();
+            const documentId = uuidv4();
 
             const metadata = {
                 documentId,
@@ -172,10 +168,8 @@ export class DocuGraphRAG {
                 // Split text into chunks
                 const chunks = await this.splitText(text);
 
-                // Process each chunk
-                for (let i = 0; i < chunks.length; i++) {
-                    const chunk = chunks[i];
-
+                // Process chunks in parallel
+                const chunkPromises = chunks.map(async (chunk, i) => {
                     // Create chunk node and link to document
                     await session.run(`
                         MATCH (d:Document {documentId: $documentId})
@@ -199,7 +193,10 @@ export class DocuGraphRAG {
                         );
                         throw error;
                     }
-                }
+                });
+
+                // Wait for all chunks to be processed
+                await Promise.all(chunkPromises);
 
                 // Update document status to processed
                 await session.run(
