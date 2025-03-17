@@ -205,13 +205,7 @@ app.post('/cleanup', async (req, res) => {
     }
 });
 
-// Remove the separate generateSchema endpoint since we're handling it in the library
-app.post('/generateSchema', async (req, res) => {
-    res.status(410).json({
-        success: false,
-        error: 'This endpoint is deprecated. Please include scenario description with document upload.'
-    });
-});
+
 
 // Add delete document endpoint
 app.delete('/documents/:documentId', async (req, res) => {
