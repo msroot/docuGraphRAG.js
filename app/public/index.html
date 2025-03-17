@@ -611,8 +611,10 @@ RETURN DISTINCT
 
                     for (const line of lines) {
                         if (line.startsWith('data: ')) {
-                            const data = line.slice(5);
-                            if (data === '[DONE]') break;
+                            const data = line.slice(5).trim();
+                            if (data === '[DONE]') {
+                                break;
+                            }
 
                             try {
                                 const parsed = JSON.parse(data);
@@ -622,7 +624,14 @@ RETURN DISTINCT
                                 }
                                 if (parsed.content) {
                                     assistantResponse += parsed.content;
+                                    // Update the message content with markdown parsing
+                                    marked.setOptions({
+                                        breaks: true,
+                                        gfm: true,
+                                        headerIds: false
+                                    });
                                     assistantMessageDiv.innerHTML = marked.parse(assistantResponse);
+                                    // Scroll to bottom
                                     chatMessages.scrollTop = chatMessages.scrollHeight;
                                 }
                             } catch (e) {
