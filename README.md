@@ -9,10 +9,11 @@
 
 docuGraphRAG.js is the successor of [docuRAG.js](https://github.com/msroot/docuRAG.js/), representing a significant architectural shift in how we handle document context and relationships:
 
-- Complex relationship patterns can be discovered and queried
-- Entity relationships are explicitly modeled and traversable
-- Multi-hop reasoning becomes possible through graph traversal
-- Better context preservation through relationship metadata
+- Hybrid search combining vector, text, and graph-based approaches
+- Entity extraction and relationship modeling
+- Efficient storage and retrieval using Neo4j
+- Streaming responses for real-time chat interactions
+- Configurable search strategies and weights
 
 ## Features 🌟
 
@@ -76,16 +77,24 @@ NEO4J_URL=bolt://localhost:7687
 NEO4J_USER=neo4j
 NEO4J_PASSWORD=your-password
 OPENAI_API_KEY=your-openai-key
+VECTOR_SEARCH_WEIGHT=0.4
+TEXT_SEARCH_WEIGHT=0.3
+GRAPH_SEARCH_WEIGHT=0.3
 ```
 
-4. Using Docker (Optional):
+4. Start Neo4j (using Docker):
 ```bash
-# Start Neo4j
 docker-compose up -d neo4j
-
-# Start the application
-docker-compose up app
 ```
+
+5. Run the example app:
+```bash
+cd app
+npm install
+npm start
+```
+
+The app will be available at http://localhost:3000
 
 ## ⚙️ Configuration
 
@@ -100,6 +109,9 @@ docker-compose up app
 | `chunkSize` | number | 1000 | Size of document chunks in characters |
 | `chunkOverlap` | number | 200 | Overlap between consecutive chunks |
 | `similarityThreshold` | number | 0.1 | Minimum similarity score for vector search |
+| `vectorSearchWeight` | number | 0.4 | Weight for vector similarity search (0-1) |
+| `textSearchWeight` | number | 0.3 | Weight for full-text search (0-1) |
+| `graphSearchWeight` | number | 0.3 | Weight for graph-based search (0-1) |
 
 Example `.env` file:
 ```bash
@@ -107,6 +119,9 @@ NEO4J_URL=bolt://localhost:7687
 NEO4J_USER=neo4j
 NEO4J_PASSWORD=your-password
 OPENAI_API_KEY=your-openai-key
+VECTOR_SEARCH_WEIGHT=0.4
+TEXT_SEARCH_WEIGHT=0.3
+GRAPH_SEARCH_WEIGHT=0.3
 ```
 
 Example configuration in code:
@@ -121,7 +136,10 @@ const config = {
     // Optional settings
     chunkSize: 1000,
     chunkOverlap: 200,
-    similarityThreshold: 0.1
+    similarityThreshold: 0.1,
+    vectorSearchWeight: 0.4,
+    textSearchWeight: 0.3,
+    graphSearchWeight: 0.3
 };
 
 const rag = new DocuGraphRAG(config);
@@ -245,8 +263,8 @@ When you ask a question:
 ### 3. Data Structure
 ```cypher
 (Document)-[:HAS_CHUNK]->(DocumentChunk)
-(DocumentChunk)-[:APPEARS_IN]->(Entity)
-(Entity)-[r]->(Entity)
+(DocumentChunk)-[:HAS_ENTITY]->(Entity)
+(Entity)-[:RELATES_TO]->(Entity)
 ```
 
 ## API Reference 📚
@@ -260,23 +278,6 @@ When you ask a question:
     - `textSearch`: Enable full-text search
     - `graphSearch`: Enable graph-based search
 
-## 🔧 Troubleshooting
-
-1. **Neo4j Connection Issues**
-   - Ensure Neo4j is running and accessible
-   - Check connection credentials
-   - Verify network connectivity
-
-2. **Search Issues**
-   - Verify indexes are created properly
-   - Check document processing completed successfully
-   - Ensure sufficient data is loaded
-
-3. **Performance Issues**
-   - Monitor memory usage
-   - Check query execution plans
-   - Optimize index usage
-
 ## 📚 Examples
 
 The `examples/` directory contains ready-to-use implementations:
@@ -288,40 +289,6 @@ npm install
 npm start
 ```
 Demonstrates a web interface for document chat and visualization.
-
-### Basic Processing Example
-```bash
-cd examples/basic
-npm install
-npm start
-```
-
-## 🗺️ Roadmap
-
-### Implemented ✓
-- Hybrid Search System
-  - Vector similarity (OpenAI embeddings)
-  - Full-text search (Neo4j indexes)
-  - Graph-based retrieval
-  - Weighted scoring (40/30/30)
-
-### Coming Soon 🚀
-- Extended Data Ingestion
-  - PDF (pdf.js + OCR)
-  - Web pages (Puppeteer)
-  - GitHub repos
-  - Markdown/MDX
-
-- Advanced Graph Algorithms
-  - Path-finding traversal
-  - Temporal relationship analysis
-  - Semantic subgraph extraction
-  - Weighted relationship scoring
-
-- Search Enhancements
-  - Multi-hop reasoning
-  - Bi-directional relevance
-  - Dynamic context windows
 
 ## Contributing 🤝
 

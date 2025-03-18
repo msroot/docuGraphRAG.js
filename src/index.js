@@ -38,6 +38,9 @@ export class DocuGraphRAG {
             chunkOverlap: 200,
             searchLimit: 3,
             debug: false,
+            vectorSearchWeight: 0.4,
+            textSearchWeight: 0.3,
+            graphSearchWeight: 0.3,
             ...config,
         };
 
@@ -224,22 +227,29 @@ export class DocuGraphRAG {
 
             if (vectorSearch) {
                 const vectorResults = await this.llm.searchSimilarVectors(questionEmbedding, documentIds);
-                relevantChunks.push(...vectorResults);
+                relevantChunks.push(...vectorResults.map(r => ({ ...r, weight: this.config.vectorSearchWeight })));
             }
 
             if (textSearch) {
                 const textResults = await this.llm.searchSimilarChunks(question, '', documentIds);
-                relevantChunks.push(...textResults);
+                relevantChunks.push(...textResults.map(r => ({ ...r, weight: this.config.textSearchWeight })));
             }
 
             if (graphSearch) {
                 const graphResults = await this.llm.searchGraphRelationships(question, documentIds);
-                relevantChunks.push(...graphResults);
+                relevantChunks.push(...graphResults.map(r => ({ ...r, weight: this.config.graphSearchWeight })));
             }
 
+            // Apply weights to scores
+            relevantChunks = relevantChunks.map(chunk => ({
+                ...chunk,
+                weightedScore: chunk.score * chunk.weight
+            }));
+
+            // Remove duplicates and sort by weighted score
             relevantChunks = Array.from(new Set(relevantChunks.map(c => c.content)))
                 .map(content => relevantChunks.find(c => c.content === content))
-                .sort((a, b) => b.score - a.score)
+                .sort((a, b) => b.weightedScore - a.weightedScore)
                 .slice(0, 5);
 
             const response = await this.llm.generateAnswer(question, this.formatContextForLLM(relevantChunks));
@@ -261,8 +271,8 @@ export class DocuGraphRAG {
         };
 
         for (const context of mergedContext) {
-            // Use the score property directly and provide a default if undefined
-            const score = context.score || 0;
+            // Use the weightedScore property instead of score
+            const score = context.weightedScore || 0;
             formattedContext += `\n### Context (Score: ${score.toFixed(3)})\n`;
 
             // Add content
