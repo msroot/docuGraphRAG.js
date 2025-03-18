@@ -92,7 +92,6 @@ IMPORTANT:
     }
 
     async processTextToGraph(text, documentId, chunkIndex, analysisDescription, embedding) {
-
         const messages = [
             { role: "system", content: this.systemPrompt },
             {
@@ -103,20 +102,16 @@ IMPORTANT:
 
         const content = await this.makeOpenAIRequest(messages);
 
-
-
         const parsedResponse = JSON.parse(content);
         let entities = parsedResponse.entities || [];
         let relationships = parsedResponse.relationships || [];
-
-
-
 
         // Validate and sanitize entity properties
         entities = entities.map(e => {
             const baseProps = {
                 text: String(e.text).trim(),
-                type: String(e.type).trim()
+                type: String(e.type).trim(),
+                documentId: documentId // Add documentId to entity properties
             };
 
             // Add all properties from the entity
@@ -136,9 +131,9 @@ IMPORTANT:
             fromType: String(r.fromType).trim(),
             to: String(r.to).trim(),
             toType: String(r.toType).trim(),
-            type: String(r.type).trim()
-        }))
-
+            type: String(r.type).trim(),
+            documentId: documentId // Add documentId to relationship properties
+        }));
 
         // Full query with entities and relationships
         const query = `
@@ -158,31 +153,31 @@ IMPORTANT:
                     WITH c
                     UNWIND $entities as entity
                     CALL apoc.merge.node(['Entity'], 
-                        {text: entity.text, type: entity.type}, 
+                        {text: entity.text, type: entity.type, documentId: entity.documentId}, 
                         entity
                     ) YIELD node
-                    MERGE (c)-[:HAS_ENTITY]->(node)
+                    // Create APPEARS_IN relationship from chunk to entity
+                    MERGE (c)-[:APPEARS_IN]->(node)
 
-                    // Finally create or merge relationships using APOC with all properties
+                    // Finally create or merge relationships between entities using APOC with all properties
                     WITH c, collect(node) as entityNodes
                     UNWIND $relationships as rel
-                    MATCH (e1:Entity {text: rel.from, type: rel.fromType})<-[:HAS_ENTITY]-(c)
-                    MATCH (e2:Entity {text: rel.to, type: rel.toType})<-[:HAS_ENTITY]-(c)
+                    MATCH (e1:Entity {text: rel.from, type: rel.fromType, documentId: rel.documentId})
+                    MATCH (e2:Entity {text: rel.to, type: rel.toType, documentId: rel.documentId})
                     CALL apoc.merge.relationship(e1, rel.type, 
-                        {type: rel.type}, 
+                        {type: rel.type, documentId: rel.documentId}, 
                         {
                             type: rel.type,
                             fromType: rel.fromType,
-                            toType: rel.toType
+                            toType: rel.toType,
+                            documentId: rel.documentId,
+                            created: datetime(),
+                            lastUpdated: datetime()
                         }, 
                         e2
                     ) YIELD rel as r
                     RETURN c, count(r) as relationshipCount, count(entityNodes) as entityCount
                 `;
-
-
-
-
 
         const params = {
             documentId,
@@ -196,11 +191,7 @@ IMPORTANT:
         return { query, params };
     }
 
-
-
     async generateAnswer(question, context) {
-
-
         const response = await this.openai.chat.completions.create({
             model: this.model,
             messages: [
@@ -227,7 +218,6 @@ Use only the information from the context to answer questions. If you cannot fin
             stream: true
         });
         return response;
-
     }
 
     // Add a method to search using vector similarity
@@ -498,6 +488,4 @@ Use only the information from the context to answer questions. If you cannot fin
         console.log('Query results:', JSON.stringify(data, null, 2));
         return data;
     }
-
-
 }

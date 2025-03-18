@@ -63,11 +63,12 @@
                 <div class="neo4j-query">
                     <h4>Neo4j Query</h4>
                     <textarea id="neo4j-query" readonly>
-MATCH (d:Document)-[:HAS_CHUNK]->(c:DocumentChunk)-[:HAS_ENTITY]->(e:Entity)
+// Graph Visualization Query
+MATCH (d:Document)-[:HAS_CHUNK]->(c:DocumentChunk)-[:APPEARS_IN]->(e:Entity)
 WHERE d.documentId IN $documentIds
 WITH d, c, e
 MATCH (e)-[r]->(e2:Entity)
-WHERE (c)-[:HAS_ENTITY]->(e2)
+WHERE e.documentId = e2.documentId
 RETURN DISTINCT 
     d as document,
     c as chunk,
@@ -127,6 +128,11 @@ RETURN DISTINCT
     <script>
         // API endpoint configuration
         
+        // Load saved scenario from localStorage when the script runs
+        const savedScenario = localStorage.getItem('analysisScenario');
+        if (savedScenario) {
+            document.getElementById('scenario-description').value = savedScenario;
+        }
         
         let currentSessionId = null;
         let currentDocumentId = null;
@@ -140,6 +146,14 @@ RETURN DISTINCT
         window.addEventListener('DOMContentLoaded', () => {
             loadDocuments();
             initializeDragAndDrop();
+            
+            // Add event listener for scenario description changes
+            const scenarioDescription = document.getElementById('scenario-description');
+            scenarioDescription.addEventListener('input', (e) => {
+                // Save to localStorage whenever the user types
+                localStorage.setItem('analysisScenario', e.target.value);
+                updateSubmitButtonState();
+            });
         });
 
         function initializeDragAndDrop() {
@@ -355,11 +369,11 @@ RETURN DISTINCT
             if (selectedDocs.length > 0) {
                 const docIds = selectedDocs.map(id => `"${id}"`).join(', ');
                 queryTextarea.value = `// Graph Visualization Query
-MATCH (d:Document)-[:HAS_CHUNK]->(c:DocumentChunk)-[:HAS_ENTITY]->(e:Entity)
+MATCH (d:Document)-[:HAS_CHUNK]->(c:DocumentChunk)-[:APPEARS_IN]->(e:Entity)
 WHERE d.documentId IN [${docIds}]
 WITH d, c, e
 MATCH (e)-[r]->(e2:Entity)
-WHERE (c)-[:HAS_ENTITY]->(e2)
+WHERE e.documentId = e2.documentId
 RETURN DISTINCT 
     d as document,
     c as chunk,
@@ -479,9 +493,6 @@ RETURN DISTINCT
                 });
             }
         }
-
-        // Add event listener for scenario description changes
-        document.getElementById('scenario-description').addEventListener('input', updateSubmitButtonState);
 
         // Function to disable/enable chat
         function disableChat(disabled) {

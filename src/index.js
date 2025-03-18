@@ -201,27 +201,25 @@ export class DocuGraphRAG {
     }
 
     async extractEntities(text, chunkId, documentId, analysisDescription) {
+        try {
+            // Step 1: Generate embedding first
+            const embedding = await this.llm.generateEmbedding(text);
 
+            // Step 2: Try entity extraction
+            const cypher = await this.llm.processTextToGraph(text, documentId, chunkId, analysisDescription, embedding);
 
-        // Step 1: Generate embedding first
-        const embedding = await this.llm.generateEmbedding(text);
-
-        // Step 2: Try entity extraction
-
-
-        const cypher = await this.llm.processTextToGraph(text, documentId, chunkId, analysisDescription, embedding);
-
-        if (cypher?.query && typeof cypher.query === 'string' && !cypher.query.includes('...')) {
-
-            try {
-                const session = this.driver.session();
-                await session.run(cypher.query, cypher.params);
-
-            } finally {
-                await session.close();
+            if (cypher?.query && typeof cypher.query === 'string' && !cypher.query.includes('...')) {
+                try {
+                    await this.runQuery(cypher.query, cypher.params);
+                } catch (error) {
+                    console.error('Error executing Cypher query:', error);
+                    throw error;
+                }
             }
+        } catch (error) {
+            console.error('Error in extractEntities:', error);
+            throw error;
         }
-
     }
 
 
