@@ -134,6 +134,15 @@ RETURN DISTINCT
             document.getElementById('scenario-description').value = savedScenario;
         }
         
+        // Load saved search options from localStorage
+        const savedSearchOptions = localStorage.getItem('searchOptions');
+        if (savedSearchOptions) {
+            const options = JSON.parse(savedSearchOptions);
+            document.getElementById('vectorSearch').checked = options.vectorSearch;
+            document.getElementById('textSearch').checked = options.textSearch;
+            document.getElementById('graphSearch').checked = options.graphSearch;
+        }
+        
         let currentSessionId = null;
         let currentDocumentId = null;
         let documents = new Map();
@@ -153,6 +162,18 @@ RETURN DISTINCT
                 // Save to localStorage whenever the user types
                 localStorage.setItem('analysisScenario', e.target.value);
                 updateSubmitButtonState();
+            });
+
+            // Add event listeners for search options changes
+            ['vectorSearch', 'textSearch', 'graphSearch'].forEach(id => {
+                document.getElementById(id).addEventListener('change', (e) => {
+                    const searchOptions = {
+                        vectorSearch: document.getElementById('vectorSearch').checked,
+                        textSearch: document.getElementById('textSearch').checked,
+                        graphSearch: document.getElementById('graphSearch').checked
+                    };
+                    localStorage.setItem('searchOptions', JSON.stringify(searchOptions));
+                });
             });
         });
 

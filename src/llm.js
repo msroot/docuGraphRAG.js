@@ -137,47 +137,43 @@ IMPORTANT:
 
         // Full query with entities and relationships
         const query = `
-                    // First create or merge the document chunk with its embedding
-                    MATCH (d:Document {documentId: $documentId})
-                    MERGE (c:DocumentChunk {documentId: $documentId, chunkIndex: $chunkIndex})
-                    SET c += {
-                        content: $text,
-                        embedding: $embedding,
-                        hasEntities: true,
-                        created: datetime(),
-                        lastUpdated: datetime()
-                    }
-                    MERGE (d)-[:HAS_CHUNK]->(c)
+            // First match the existing document chunk
+            MATCH (d:Document {documentId: $documentId})
+            MATCH (c:DocumentChunk {documentId: $documentId, index: $chunkIndex})
+            SET c += {
+                hasEntities: true,
+                lastUpdated: datetime()
+            }
 
-                    // Then create or merge entities using APOC with all properties
-                    WITH c
-                    UNWIND $entities as entity
-                    CALL apoc.merge.node(['Entity'], 
-                        {text: entity.text, type: entity.type, documentId: entity.documentId}, 
-                        entity
-                    ) YIELD node
-                    // Create APPEARS_IN relationship from chunk to entity
-                    MERGE (c)-[:APPEARS_IN]->(node)
+            // Then create or merge entities using APOC with all properties
+            WITH c
+            UNWIND $entities as entity
+            CALL apoc.merge.node(['Entity'], 
+                {text: entity.text, type: entity.type, documentId: entity.documentId}, 
+                entity
+            ) YIELD node
+            // Create APPEARS_IN relationship from chunk to entity
+            MERGE (c)-[:APPEARS_IN]->(node)
 
-                    // Finally create or merge relationships between entities using APOC with all properties
-                    WITH c, collect(node) as entityNodes
-                    UNWIND $relationships as rel
-                    MATCH (e1:Entity {text: rel.from, type: rel.fromType, documentId: rel.documentId})
-                    MATCH (e2:Entity {text: rel.to, type: rel.toType, documentId: rel.documentId})
-                    CALL apoc.merge.relationship(e1, rel.type, 
-                        {type: rel.type, documentId: rel.documentId}, 
-                        {
-                            type: rel.type,
-                            fromType: rel.fromType,
-                            toType: rel.toType,
-                            documentId: rel.documentId,
-                            created: datetime(),
-                            lastUpdated: datetime()
-                        }, 
-                        e2
-                    ) YIELD rel as r
-                    RETURN c, count(r) as relationshipCount, count(entityNodes) as entityCount
-                `;
+            // Finally create or merge relationships between entities using APOC with all properties
+            WITH c, collect(node) as entityNodes
+            UNWIND $relationships as rel
+            MATCH (e1:Entity {text: rel.from, type: rel.fromType, documentId: rel.documentId})
+            MATCH (e2:Entity {text: rel.to, type: rel.toType, documentId: rel.documentId})
+            CALL apoc.merge.relationship(e1, rel.type, 
+                {type: rel.type, documentId: rel.documentId}, 
+                {
+                    type: rel.type,
+                    fromType: rel.fromType,
+                    toType: rel.toType,
+                    documentId: rel.documentId,
+                    created: datetime(),
+                    lastUpdated: datetime()
+                }, 
+                e2
+            ) YIELD rel as r
+            RETURN c, count(r) as relationshipCount, count(entityNodes) as entityCount
+        `;
 
         const params = {
             documentId,
@@ -224,7 +220,7 @@ Use only the information from the context to answer questions. If you cannot fin
     async searchSimilarVectors(questionEmbedding, documentIds) {
         const session = this.driver.session();
         try {
-            // Use native cosine similarity calculation
+            // Use native cosine similarity calculation with lower threshold
             const query = `
                 // Match chunks from specified documents
                 MATCH (c:DocumentChunk)
@@ -243,7 +239,7 @@ Use only the information from the context to answer questions. If you cannot fin
                             mag2 + $embedding[i] * $embedding[i]
                         ))
                      ) AS similarity
-                WHERE similarity > 0.6  // Minimum similarity threshold
+                WHERE similarity > 0.1
 
                 // Return results ordered by similarity
                 RETURN 

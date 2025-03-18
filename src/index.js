@@ -73,13 +73,25 @@ export class DocuGraphRAG {
             // Create basic indexes
             const session = this.driver.session();
             try {
-                // Create indexes within a transaction
-                await session.executeWrite(tx => Promise.all([
-                    tx.run(`CREATE INDEX document_id IF NOT EXISTS FOR (d:Document) ON (d.documentId)`),
-                    tx.run(`CREATE INDEX chunk_id IF NOT EXISTS FOR (c:DocumentChunk) ON (c.documentId, c.chunkId)`),
-                    tx.run(`CREATE INDEX entity_text_type IF NOT EXISTS FOR (e:Entity) ON (e.text, e.type)`),
+                // Create each index in a separate transaction
+                await session.executeWrite(tx =>
+                    tx.run(`CREATE INDEX document_id IF NOT EXISTS FOR (d:Document) ON (d.documentId)`)
+                );
+
+                await session.executeWrite(tx =>
+                    tx.run(`CREATE INDEX chunk_id IF NOT EXISTS FOR (c:DocumentChunk) ON (c.documentId, c.chunkId)`)
+                );
+
+                await session.executeWrite(tx =>
+                    tx.run(`CREATE INDEX entity_text_type IF NOT EXISTS FOR (e:Entity) ON (e.text, e.type)`)
+                );
+
+                await session.executeWrite(tx =>
                     tx.run(`CREATE FULLTEXT INDEX chunk_content IF NOT EXISTS FOR (c:DocumentChunk) ON EACH [c.content]`)
-                ]));
+                );
+
+
+
             } finally {
                 await session.close();
             }
@@ -157,17 +169,29 @@ export class DocuGraphRAG {
 
         // Process chunks in parallel
         const chunkPromises = chunks.map(async (chunk, i) => {
-            // Create chunk node and link to document
+            // Generate embedding for the chunk
+            const embedding = await this.llm.generateEmbedding(chunk.pageContent);
+
+
+            // Create chunk node and link to document with embedding
             await this.runQuery(`
-                        MATCH (d:Document {documentId: $documentId})
-                        CREATE (c:DocumentChunk {documentId: $documentId, content: $content, index: $index, text: $text, created: $created})
-                        CREATE (d)-[:HAS_CHUNK]->(c)
-                        `, {
+                MATCH (d:Document {documentId: $documentId})
+                CREATE (c:DocumentChunk {
+                    documentId: $documentId, 
+                    content: $content, 
+                    index: $index, 
+                    text: $text, 
+                    created: $created,
+                    embedding: $embedding
+                })
+                CREATE (d)-[:HAS_CHUNK]->(c)
+            `, {
                 documentId: metadata.documentId,
                 content: chunk.pageContent,
                 index: i,
                 text: `Chunk ${i}`,
-                created: new Date().toISOString()
+                created: new Date().toISOString(),
+                embedding: embedding
             });
 
             // Extract entities after chunk is created
