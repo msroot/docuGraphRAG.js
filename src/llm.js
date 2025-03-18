@@ -385,7 +385,7 @@ Use only the information from the context to answer questions. If you cannot fin
         let searchEntities = JSON.parse(entityResponse);
         console.log('Search entities:', searchEntities);
 
-        // First, let's see what entities we have in the database
+        // Debug query to see what entities we have
         const debugQuery = `
             MATCH (e:Entity)
             RETURN e.text, e.type, e.documentId
@@ -398,86 +398,87 @@ Use only the information from the context to answer questions. If you cannot fin
             documentId: r.get('e.documentId')
         })));
 
-        // Build a Cypher query that finds paths between entities and through relevant chunks
+        // Build the main search query
         const query = `
-                // Match documents within scope
-                MATCH (d:Document)
-                WHERE d.documentId IN $documentIds
-                WITH d
-                
-                // Find chunks that contain our search entities
-                MATCH (d)-[:HAS_CHUNK]->(c:DocumentChunk)-[:HAS_ENTITY]->(e:Entity)
-                WHERE any(searchTerm IN $searchEntities 
-                    WHERE toLower(e.text) = toLower(searchTerm) 
-                    OR toLower(e.text) CONTAINS toLower(searchTerm)
-                    OR toLower(searchTerm) CONTAINS toLower(e.text))
-                
-                // Get the chunk content and matching entities
-                WITH c, collect(DISTINCT e) as matchingEntities
-                
-                // For each matching entity, find related entities through relationships
-                UNWIND matchingEntities as me
-                MATCH path = (me)-[:RELATES_TO*0..3]-(related:Entity)
-                
-                // Get the chunk content and path information
-                WITH c, path, me, related
-                
-                // Calculate relevance score based on path length and entity matches
-                WITH c, path,
-                     size(relationships(path)) as pathLength,
-                     [node IN nodes(path) WHERE node:Entity | node.text] as entityTexts
-                
-                // Calculate a relevance score
-                WITH c, path, pathLength,
-                     1.0 / (pathLength + 1) as pathScore,
-                     size([x IN entityTexts WHERE any(term IN $searchEntities 
-                          WHERE toLower(x) = toLower(term)
-                          OR toLower(x) CONTAINS toLower(term)
-                          OR toLower(term) CONTAINS toLower(x))]) as matchCount
-                
-                // Combine scores and return results
-                WITH c, path,
-                     (pathScore * matchCount) as relevanceScore
-                
-                // Group by chunk and collect all paths
-                WITH c.documentId as docId, c.content as content,
-                     collect({
-                         score: relevanceScore,
-                         entities: [node IN nodes(path) WHERE node:Entity | {
-                             text: node.text,
-                             type: node.type,
-                             properties: node.properties
-                         }],
-                         relationships: [rel IN relationships(path) | {
-                             from: startNode(rel).text,
-                             fromType: startNode(rel).type,
-                             to: endNode(rel).text,
-                             toType: endNode(rel).type,
-                             type: rel.type
-                         }]
-                     }) as paths
-                
-                // Get the best path for each chunk
-                WITH docId, content, paths,
-                     reduce(maxScore = 0.0, p IN paths | CASE WHEN p.score > maxScore THEN p.score ELSE maxScore END) as bestScore,
-                     [p IN paths WHERE p.score = reduce(maxScore = 0.0, p2 IN paths | CASE WHEN p2.score > maxScore THEN p2.score ELSE maxScore END)][0] as bestPath
-                
-                // Deduplicate by content and documentId
-                WITH docId, content, bestScore, bestPath
-                ORDER BY bestScore DESC
-                
-                // Collect unique results
-                WITH collect({
-                    content: content,
-                    documentId: docId,
-                    score: bestScore,
-                    entities: bestPath.entities,
-                    relationships: bestPath.relationships
-                }) as results
-                
-                // Return unique results
-                RETURN [r IN results WHERE r.content IS NOT NULL] as result
-                LIMIT 10`;
+            // Match documents within scope
+            MATCH (d:Document)
+            WHERE d.documentId IN $documentIds
+            WITH d
+
+            // Find chunks and entities that match our search terms
+            MATCH (d)-[:HAS_CHUNK]->(c:DocumentChunk)
+            MATCH (c)-[:APPEARS_IN]->(e:Entity)
+            WHERE e.documentId = d.documentId
+            AND any(searchTerm IN $searchEntities 
+                WHERE toLower(e.text) = toLower(searchTerm) 
+                OR toLower(e.text) CONTAINS toLower(searchTerm)
+                OR toLower(searchTerm) CONTAINS toLower(e.text))
+
+            // Get matching entities and their relationships
+            WITH c, collect(DISTINCT e) as matchingEntities
+            UNWIND matchingEntities as sourceEntity
+
+            // Find paths between entities through direct relationships
+            OPTIONAL MATCH path = (sourceEntity)-[r*0..2]-(targetEntity:Entity)
+            WHERE targetEntity.documentId = sourceEntity.documentId
+            
+            // Get all entities that appear in this chunk
+            WITH c, sourceEntity, path, targetEntity,
+                 [(c)-[:APPEARS_IN]->(e:Entity) | e] as chunkEntities
+
+            // Calculate relevance scores
+            WITH c, path,
+                 size(relationships(path)) as pathLength,
+                 [node IN nodes(path) WHERE node:Entity | node.text] as pathEntities,
+                 chunkEntities
+
+            // Score based on path length and entity matches
+            WITH c, path, pathLength, pathEntities, chunkEntities,
+                 CASE WHEN pathLength = 0 THEN 1.0 
+                      ELSE 1.0 / pathLength 
+                 END as pathScore,
+                 size([x IN pathEntities WHERE any(term IN $searchEntities 
+                    WHERE toLower(x) = toLower(term)
+                    OR toLower(x) CONTAINS toLower(term)
+                    OR toLower(term) CONTAINS toLower(x))]) as matchCount
+
+            // Combine scores
+            WITH c, path, pathScore * matchCount as relevanceScore,
+                 pathEntities, chunkEntities
+
+            // Group by chunk and collect all paths
+            WITH c.documentId as docId, 
+                 c.content as content,
+                 collect({
+                     score: relevanceScore,
+                     entities: pathEntities + [e IN chunkEntities WHERE NOT e.text IN pathEntities],
+                     relationships: [rel IN relationships(path) | {
+                         from: startNode(rel).text,
+                         fromType: startNode(rel).type,
+                         to: endNode(rel).text,
+                         toType: endNode(rel).type,
+                         type: type(rel)
+                     }]
+                 }) as paths
+
+            // Get the best path for each chunk
+            WITH docId, content, paths,
+                 reduce(maxScore = 0.0, p IN paths | 
+                    CASE WHEN p.score > maxScore THEN p.score ELSE maxScore END) as bestScore,
+                 [p IN paths WHERE p.score = reduce(maxScore = 0.0, p2 IN paths | 
+                    CASE WHEN p2.score > maxScore THEN p2.score ELSE maxScore END)][0] as bestPath
+
+            // Order by score and collect results
+            WITH docId, content, bestScore, bestPath
+            ORDER BY bestScore DESC
+            RETURN collect({
+                content: content,
+                documentId: docId,
+                score: bestScore,
+                entities: bestPath.entities,
+                relationships: bestPath.relationships
+            }) as result
+            LIMIT 10`;
 
         const result = await this.runQuery(query, {
             documentIds,
