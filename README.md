@@ -290,7 +290,21 @@ cd examples/express
 npm install
 npm start
 ```
-Demonstrates a web interface for document chat and visualization.
+The example app provides a complete web interface featuring:
+- Document upload and management
+- Interactive chat interface with streaming responses
+- Real-time Knowledge Graph visualization
+  - Visual representation of document relationships
+  - Entity connections and relationships
+  - Expandable full-screen view
+  - Interactive node exploration
+- Configurable search strategies:
+  - Vector similarity search
+  - Full-text search
+  - Graph-based search
+- Direct access to Neo4j Browser for advanced queries
+
+Visit http://localhost:3000 to explore the interface.
 
 ## Contributing 🤝
 
