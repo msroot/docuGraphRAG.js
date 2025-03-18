@@ -16,15 +16,14 @@ This is an example implementation showing how to use docuGraphRAG.js with Expres
 
 ## Quick Start
 
-1. Start the required services:
+1. Start Neo4j:
 ```bash
-# Start Neo4j
 docker-compose up -d
 ```
 
 2. Install dependencies:
 ```bash
-cd examples/express
+cd app
 npm install
 ```
 

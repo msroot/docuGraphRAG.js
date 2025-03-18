@@ -228,7 +228,6 @@ RETURN DISTINCT
         }
 
         async function loadDocuments() {
-            console.log('Loading documents...');
             try {
                 const response = await fetch(`/documents`);
                 if (!response.ok) {
@@ -237,7 +236,6 @@ RETURN DISTINCT
                 const data = await response.json();
                 
                 if (data.success) {
-                    console.log('Documents loaded:', data.documents);
                     documents.clear();
                     const documentsDiv = document.getElementById('documents');
                     documentsDiv.innerHTML = '';
@@ -251,22 +249,22 @@ RETURN DISTINCT
                     // Update UI state
                     updateUIState();
                 } else {
-                    console.error('Failed to load documents:', data.error);
+                    showError('Failed to load documents');
                 }
             } catch (error) {
-                console.error('Error loading documents:', error);
+                showError('Failed to load documents');
             }
         }
 
         function addDocumentToList(doc) {
             if (!doc) {
-                console.error('Invalid document object:', doc);
+                showError('Invalid document object');
                 return;
             }
 
             const documentId = doc.id;
             if (!documentId) {
-                console.error('Document has no ID:', doc);
+                showError('Document has no ID');
                 return;
             }
 
@@ -326,14 +324,13 @@ RETURN DISTINCT
                 // Update UI state
                 updateUIState();
             } catch (error) {
-                console.error('Error deleting document:', error);
-                showError('Failed to delete document: ' + error.message);
+                showError('Failed to delete document');
             }
         }
 
         function selectDocument(docId) {
             if (!docId) {
-                console.error('Invalid document ID:', docId);
+                showError('Invalid document ID');
                 return;
             }
 
@@ -446,7 +443,6 @@ RETURN DISTINCT
             hideError();
 
             try {
-                // Send both file and scenario description in one request
                 const formData = new FormData();
                 formData.append('pdf', selectedFile);
                 formData.append('scenarioDescription', scenarioDescription);
@@ -458,9 +454,6 @@ RETURN DISTINCT
                 const data = await response.json();
                 
                 if (data.success) {
-                    console.log('Document uploaded successfully:', data);
-                    
-                    // Add document to list
                     const documentData = {
                         id: data.documentId,
                         name: selectedFile.name,
@@ -468,7 +461,6 @@ RETURN DISTINCT
                         selected: true
                     };
 
-                    // Add new document to list
                     documents.set(documentData.id, documentData);
                     addDocumentToList(documentData);
                     
@@ -476,15 +468,14 @@ RETURN DISTINCT
                     selectedFile = null;
                     document.getElementById('scenario-description').value = '';
                     document.getElementById('drop-zone').querySelector('p').textContent = 'Drop your PDF here';
-                    updateSubmitButtonState();
-                    
-                    // Update UI state
-                    updateUIState();
+            updateSubmitButtonState();
+            
+            // Update UI state
+            updateUIState();
                 } else {
                     throw new Error(data.error || 'Failed to process PDF');
                 }
             } catch (error) {
-                console.error('Error uploading PDF:', error);
                 showError(error.message);
             } finally {
                 document.getElementById('upload-loading').classList.remove('active');
@@ -618,7 +609,7 @@ RETURN DISTINCT
                     body: JSON.stringify({
                         question,
                         documentIds: selectedDocuments,
-                        ...searchOptions  // Include search options in the request
+                        ...searchOptions
                     })
                 });
 
@@ -656,24 +647,21 @@ RETURN DISTINCT
                                 }
                                 if (parsed.content) {
                                     assistantResponse += parsed.content;
-                                    // Update the message content with markdown parsing
                                     marked.setOptions({
                                         breaks: true,
                                         gfm: true,
                                         headerIds: false
                                     });
                                     assistantMessageDiv.innerHTML = marked.parse(assistantResponse);
-                                    // Scroll to bottom
                                     chatMessages.scrollTop = chatMessages.scrollHeight;
                                 }
                             } catch (e) {
-                                console.error('Error parsing SSE data:', e);
+                                // Handle parsing error silently
                             }
                         }
                     }
                 }
             } catch (error) {
-                console.error('Error:', error);
                 // Remove thinking message
                 thinkingDiv.remove();
                 
@@ -683,11 +671,8 @@ RETURN DISTINCT
                 errorDiv.innerHTML = `❌ Error: ${error.message}`;
                 chatMessages.appendChild(errorDiv);
             } finally {
-                // Re-enable input and focus
                 messageInput.disabled = false;
                 messageInput.focus();
-                
-                // Scroll to bottom
                 chatMessages.scrollTop = chatMessages.scrollHeight;
             }
         }
@@ -763,7 +748,6 @@ RETURN DISTINCT
             };
 
             recognition.onerror = function(event) {
-                console.error('Speech recognition error:', event.error);
                 toggleMic(); // Turn off mic on error
             };
         }
@@ -772,7 +756,6 @@ RETURN DISTINCT
             const micButton = document.getElementById('mic-button');
             
             if (!recognition) {
-                console.error('Speech recognition not supported');
                 return;
             }
 

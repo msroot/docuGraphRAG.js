@@ -25,16 +25,24 @@ docuGraphRAG.js is the successor of [docuRAG.js](https://github.com/msroot/docuR
 - Semantic understanding using embeddings
 - Find conceptually related content
 - Efficient embedding storage and retrieval
+- Configurable similarity thresholds
 
 ### 3. Basic Graph Storage
 - Stores documents as connected chunks
 - Uses Neo4j for efficient storage
 - Basic document-chunk relationships
+- Entity relationship tracking
+- Graph traversal capabilities
 
 ### 4. Chat Interface
 - Natural language interaction with documents
 - Context-aware responses
 - Streaming response generation
+- Multiple search strategies:
+  - Vector similarity search
+  - Full-text search
+  - Graph-based search
+- Configurable search options
 
 ## 🛠️ Prerequisites
 
@@ -89,7 +97,7 @@ docker-compose up app
 | **Optional Settings** |
 | `chunkSize` | number | 1000 | Size of document chunks in characters |
 | `chunkOverlap` | number | 200 | Overlap between consecutive chunks |
-| `debug` | boolean | true | Enable debug logging |
+| `similarityThreshold` | number | 0.1 | Minimum similarity score for vector search |
 
 Example `.env` file:
 ```bash
@@ -111,7 +119,7 @@ const config = {
     // Optional settings
     chunkSize: 1000,
     chunkOverlap: 200,
-    debug: true
+    similarityThreshold: 0.1
 };
 
 const rag = new DocuGraphRAG(config);
@@ -130,7 +138,12 @@ await rag.initialize();
 const result = await rag.processDocument(text, "Analysis focus description");
 
 // Chat with the document
-const answer = await rag.chat("Who is Dr. Sarah Jones?", { documentId: "doc123" });
+const answer = await rag.chat("Who is Dr. Sarah Jones?", {
+    documentIds: ["doc123"],
+    vectorSearch: true,
+    textSearch: true,
+    graphSearch: true
+});
 ```
 
 ## System Architecture 🏗️
@@ -154,8 +167,10 @@ graph TD
             GraphDB[("Neo4j Graph DB")]
             Indexes["Custom Indexes"]
             TextIndex["Full-Text Search Index"]
+            VectorIndex["Vector Index"]
             GraphDB --> |"Indexed by"| Indexes
             GraphDB --> |"Text indexing"| TextIndex
+            GraphDB --> |"Vector indexing"| VectorIndex
         end
         
         VectorGen --> |"Store embeddings"| GraphDB
@@ -174,6 +189,7 @@ graph TD
             TextSearch --> |"Text matching (30%)"| HybridSearch
             
             TextIndex --> |"Full-text results"| TextSearch
+            VectorIndex --> |"Vector results"| HybridSearch
             GraphDB --> |"Graph traversal"| HybridSearch
             
             HybridSearch --> |"Ranked & merged results"| ContextFusion
@@ -192,7 +208,7 @@ graph TD
     
     class DocInput,UserQuery input;
     class TextProc,Chunking,VectorGen,EntityExt,RelEngine,RelCreation,QueryEmbed,QueryEntity,TextSearch process;
-    class GraphDB,Indexes,TextIndex database;
+    class GraphDB,Indexes,TextIndex,VectorIndex database;
     class HybridSearch,ContextFusion search;
     class Answer output;
 
@@ -217,12 +233,18 @@ graph TD
 ### 2. Search Process
 When you ask a question:
 1. Converts question to vector embedding
-2. Finds relevant document chunks
-3. Generates comprehensive answer
+2. Finds relevant document chunks using multiple strategies:
+   - Vector similarity search
+   - Full-text search
+   - Graph-based search
+3. Merges and ranks results
+4. Generates comprehensive answer
 
 ### 3. Data Structure
 ```cypher
 (Document)-[:HAS_CHUNK]->(DocumentChunk)
+(DocumentChunk)-[:APPEARS_IN]->(Entity)
+(Entity)-[r]->(Entity)
 ```
 
 ## API Reference 📚
@@ -230,6 +252,11 @@ When you ask a question:
 ### Core Methods
 - `processDocument(text, analysisDescription)`: Process and index a document
 - `chat(question, options)`: Ask questions about your documents
+  - Options:
+    - `documentIds`: Array of document IDs to search
+    - `vectorSearch`: Enable vector similarity search
+    - `textSearch`: Enable full-text search
+    - `graphSearch`: Enable graph-based search
 
 ## 🔧 Troubleshooting
 

@@ -129,99 +129,63 @@ export class DocuGraphRAG {
     }
 
     async processDocument(text, analysisDescription, fileName) {
-
-        if (!this.initialized) {
-            await this.initialize();
-        }
-
-        // Validate and convert text input
-        if (!text) {
-            throw new Error('Text content is required');
-        }
-
-        // Convert Buffer to string if needed
-        if (Buffer.isBuffer(text)) {
-            text = text.toString('utf-8');
-        }
-
-        // Ensure text is a string
-        if (typeof text !== 'string') {
-            throw new Error('Text content must be a string or Buffer');
+        console.log('📄 Processing document...');
+        if (!text || typeof text !== 'string') {
+            throw new Error('Text input is required and must be a string');
         }
 
         const documentId = uuidv4();
 
-        const metadata = {
-            documentId,
-            fileName,
-            created: new Date().toISOString(),
-            status: 'processing'
-        };
+        try {
+            await this.runQuery(
+                'CREATE (d:Document {documentId: $documentId, fileName: $fileName, created: $created, status: $status})',
+                { documentId, fileName, created: new Date().toISOString(), status: 'processing' }
+            );
 
+            const chunks = await this.splitText(text);
+            console.log('📑 Processing chunks...');
 
-        await this.runQuery(
-            'CREATE (d:Document {documentId: $documentId, fileName: $fileName, created: $created, status: $status})',
-            metadata
-        );
+            const chunkPromises = chunks.map(async (chunk, index) => {
+                const chunkId = uuidv4();
+                const embedding = await this.llm.generateEmbedding(chunk.pageContent);
 
-        // Split text into chunks
-        const chunks = await this.splitText(text);
+                await this.runQuery(`
+                    MATCH (d:Document {documentId: $documentId})
+                    CREATE (c:DocumentChunk {
+                        documentId: $documentId, 
+                        content: $content, 
+                        index: $index, 
+                        text: $text, 
+                        created: $created,
+                        embedding: $embedding
+                    })
+                    CREATE (d)-[:HAS_CHUNK]->(c)
+                `, {
+                    documentId,
+                    content: chunk.pageContent,
+                    index,
+                    text: `Chunk ${index}`,
+                    created: new Date().toISOString(),
+                    embedding
+                });
 
-        // Process chunks in parallel
-        const chunkPromises = chunks.map(async (chunk, i) => {
-            // Generate embedding for the chunk
-            const embedding = await this.llm.generateEmbedding(chunk.pageContent);
-
-
-            // Create chunk node and link to document with embedding
-            await this.runQuery(`
-                MATCH (d:Document {documentId: $documentId})
-                CREATE (c:DocumentChunk {
-                    documentId: $documentId, 
-                    content: $content, 
-                    index: $index, 
-                    text: $text, 
-                    created: $created,
-                    embedding: $embedding
-                })
-                CREATE (d)-[:HAS_CHUNK]->(c)
-            `, {
-                documentId: metadata.documentId,
-                content: chunk.pageContent,
-                index: i,
-                text: `Chunk ${i}`,
-                created: new Date().toISOString(),
-                embedding: embedding
+                try {
+                    const entityResult = await this.extractEntities(chunk.pageContent, index, documentId, analysisDescription);
+                } catch (error) {
+                    await this.runQuery(
+                        'MATCH (d:Document {documentId: $documentId}) SET d.status = $status, d.error = $error',
+                        { documentId, status: 'error', error: error.message }
+                    );
+                    throw error;
+                }
             });
 
-            // Extract entities after chunk is created
-            try {
-                const entityResult = await this.extractEntities(chunk.pageContent, i, metadata.documentId, analysisDescription);
-            } catch (error) {
-                // Update document status to error
-                await this.runQuery(
-                    'MATCH (d:Document {documentId: $documentId}) SET d.status = $status, d.error = $error',
-                    { documentId: metadata.documentId, status: 'error', error: error.message }
-                );
-                throw error;
-            }
-        });
-
-        // Wait for all chunks to be processed
-        await Promise.all(chunkPromises);
-
-        // Update document status to processed
-
-
-        await this.runQuery(
-            'MATCH (d:Document {documentId: $documentId}) SET d.status = $status, d.processedAt = datetime()',
-            { documentId: metadata.documentId, status: 'processed' }
-        );
-
-
-        return { documentId: metadata.documentId, status: 'processed' };
-
-
+            await Promise.all(chunkPromises);
+            console.log('✅ Document processed successfully');
+            return { documentId };
+        } catch (error) {
+            throw error;
+        }
     }
 
     async extractEntities(text, chunkId, documentId, analysisDescription) {
@@ -246,132 +210,45 @@ export class DocuGraphRAG {
         }
     }
 
-
-
     async chat(question, options = {}) {
+        console.log('💬 Processing chat request...');
+        const { documentIds, vectorSearch = true, textSearch = true, graphSearch = true } = options;
+
+        if (!documentIds || !Array.isArray(documentIds) || documentIds.length === 0) {
+            throw new Error('At least one document ID is required');
+        }
+
         try {
-            const { documentIds, searchOptions = {} } = options;
-            const {
-                vectorSearch = true,
-                textSearch = true,
-                graphSearch = true
-            } = searchOptions;
+            const questionEmbedding = await this.llm.generateEmbedding(question);
+            let relevantChunks = [];
 
-            if (!documentIds || documentIds.length === 0) {
-                return "Please select at least one document to search through.";
-            }
-
-
-
-            // Initialize search results
-            let vectorResults = [], textResults = [], graphResults = [];
-            const searchPromises = [];
-
-            // Generate embedding for vector search if enabled
-            let questionEmbedding;
             if (vectorSearch) {
-                questionEmbedding = await this.llm.generateEmbedding(question);
-            }
-
-            // Configure parallel searches based on enabled options
-            if (vectorSearch && questionEmbedding) {
-                searchPromises.push(
-                    this.llm.searchSimilarVectors(questionEmbedding, documentIds)
-                        .then(results => { vectorResults = results; })
-                );
+                const vectorResults = await this.llm.searchSimilarVectors(questionEmbedding, documentIds);
+                relevantChunks.push(...vectorResults);
             }
 
             if (textSearch) {
-                searchPromises.push(
-                    this.llm.searchSimilarChunks(question, '', documentIds)
-                        .then(results => { textResults = results; })
-                );
+                const textResults = await this.llm.searchSimilarChunks(question, '', documentIds);
+                relevantChunks.push(...textResults);
             }
 
             if (graphSearch) {
-                searchPromises.push(
-                    this.llm.searchGraphRelationships(question, documentIds)
-                        .then(results => { graphResults = results; })
-                );
+                const graphResults = await this.llm.searchGraphRelationships(question, documentIds);
+                relevantChunks.push(...graphResults);
             }
 
-            // Wait for all enabled searches to complete
-            await Promise.all(searchPromises);
+            relevantChunks = Array.from(new Set(relevantChunks.map(c => c.content)))
+                .map(content => relevantChunks.find(c => c.content === content))
+                .sort((a, b) => b.score - a.score)
+                .slice(0, 5);
 
-            // Combine and deduplicate results
-            const allResults = new Map();
-
-            // Helper function to add results to the map
-            const addResults = (results, source) => {
-                results.forEach(result => {
-                    const key = result.content;
-                    if (!allResults.has(key)) {
-                        allResults.set(key, {
-                            content: result.content,
-                            documentId: result.documentId,
-                            score: result.score || result.relevance || 0,
-                            source: source,
-                            entities: result.entities || [],
-                            relationships: result.relationships || []
-                        });
-                    } else {
-                        // Update score if new score is higher
-                        const existing = allResults.get(key);
-                        const newScore = result.score || result.relevance || 0;
-                        if (newScore > existing.score) {
-                            existing.score = newScore;
-                        }
-                    }
-                });
-            };
-
-            // Add results from each search method
-            if (vectorSearch) addResults(vectorResults, 'vector');
-            if (graphSearch) addResults(graphResults, 'graph');
-            if (textSearch) addResults(textResults, 'text');
-
-
-            // Debug logging for allResults
-            console.log('\n=== All Results Map ===');
-            allResults.forEach((value, key) => {
-                console.log('============> Source:', value.source);
-                console.log('Content:', key);
-                console.log('Document ID:', value.documentId);
-                console.log('Score:', value.score);
-                console.log('Entities:', JSON.stringify(value.entities, null, 2));
-                console.log('Relationships:', JSON.stringify(value.relationships, null, 2));
-            });
-
-            // Convert map to array and sort by score
-            const sortedResults = Array.from(allResults.values())
-                .sort((a, b) => b.score - a.score).slice(0, 5);
-
-            if (sortedResults.length === 0) {
-                return "I couldn't find any relevant information in the selected documents to answer your question.";
-            }
-
-
-            console.log('sortedResults:', JSON.stringify(sortedResults, null, 2));
-            // Format context with search results
-            const formattedContext = this.formatContextForLLM(sortedResults.map(result => ({
-                content: result.content,
-                score: result.score,
-                entities: result.entities || [],
-                relationships: result.relationships || []
-            })));
-
-
-            console.log('formattedContext:', formattedContext);
-
-            // Generate the final answer
-            return await this.llm.generateAnswer(question, formattedContext);
-
+            const response = await this.llm.generateAnswer(question, this.formatContextForLLM(relevantChunks));
+            console.log('✅ Chat response generated');
+            return response;
         } catch (error) {
             throw error;
         }
     }
-
-
 
     formatContextForLLM(mergedContext) {
         let formattedContext = '';
