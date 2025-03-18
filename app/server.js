@@ -82,9 +82,9 @@ app.get('/documents', async (req, res) => {
              WITH d, count(c) as chunkCount
              RETURN {
                  id: d.documentId,
-                 name: d.name,
+                 fileName: d.fileName,
                  uploadedAt: d.created,
-                 isProcessed: chunkCount > 0,
+                 status: d.status,
                  selected: true
              } as document`
         );
