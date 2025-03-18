@@ -392,23 +392,21 @@ Use only the information from the context to answer questions. If you cannot fin
         }, { role: "user", content: question }]
 
         const entityResponse = await this.makeOpenAIRequest(messages, { temperature: 0 });
-
-        // Parse the response content directly since makeOpenAIRequest already returns the content
         let searchEntities = JSON.parse(entityResponse);
         console.log('Search entities:', searchEntities);
 
-        // // First, let's see what entities we have in the database
-        // const debugQuery = `
-        //     MATCH (e:Entity)
-        //     RETURN e.text, e.type, e.documentId
-        //     LIMIT 10
-        // `;
-        // const debugResult = await this.runQuery(debugQuery);
-        // console.log('All entities in database:', debugResult.records.map(r => ({
-        //     text: r.get('e.text'),
-        //     type: r.get('e.type'),
-        //     documentId: r.get('e.documentId')
-        // })));
+        // First, let's see what entities we have in the database
+        const debugQuery = `
+            MATCH (e:Entity)
+            RETURN e.text, e.type, e.documentId
+            LIMIT 10
+        `;
+        const debugResult = await this.runQuery(debugQuery);
+        console.log('All entities in database:', debugResult.records.map(r => ({
+            text: r.get('e.text'),
+            type: r.get('e.type'),
+            documentId: r.get('e.documentId')
+        })));
 
         // Build a Cypher query that finds paths between entities and through relevant chunks
         const query = `
@@ -425,7 +423,7 @@ Use only the information from the context to answer questions. If you cannot fin
                     OR toLower(searchTerm) CONTAINS toLower(e.text))
                 
                 // Get the chunk content and matching entities
-                WITH c, collect(e) as matchingEntities
+                WITH c, collect(DISTINCT e) as matchingEntities
                 
                 // For each matching entity, find related entities through relationships
                 UNWIND matchingEntities as me
@@ -450,34 +448,54 @@ Use only the information from the context to answer questions. If you cannot fin
                 // Combine scores and return results
                 WITH c, path,
                      (pathScore * matchCount) as relevanceScore
-                ORDER BY relevanceScore DESC
-                LIMIT 10
                 
-                // Return formatted results
-                RETURN {
-                    chunkContent: c.content,
-                    score: relevanceScore,
-                    entities: [node IN nodes(path) WHERE node:Entity | {
-                        text: node.text,
-                        type: node.type,
-                        properties: node.properties
-                    }],
-                    relationships: [rel IN relationships(path) | {
-                        from: startNode(rel).text,
-                        fromType: startNode(rel).type,
-                        to: endNode(rel).text,
-                        toType: endNode(rel).type,
-                        type: rel.type
-                    }]
-                } as result`;
+                // Group by chunk and collect all paths
+                WITH c.documentId as docId, c.content as content,
+                     collect({
+                         score: relevanceScore,
+                         entities: [node IN nodes(path) WHERE node:Entity | {
+                             text: node.text,
+                             type: node.type,
+                             properties: node.properties
+                         }],
+                         relationships: [rel IN relationships(path) | {
+                             from: startNode(rel).text,
+                             fromType: startNode(rel).type,
+                             to: endNode(rel).text,
+                             toType: endNode(rel).type,
+                             type: rel.type
+                         }]
+                     }) as paths
+                
+                // Get the best path for each chunk
+                WITH docId, content, paths,
+                     reduce(maxScore = 0.0, p IN paths | CASE WHEN p.score > maxScore THEN p.score ELSE maxScore END) as bestScore,
+                     [p IN paths WHERE p.score = reduce(maxScore = 0.0, p2 IN paths | CASE WHEN p2.score > maxScore THEN p2.score ELSE maxScore END)][0] as bestPath
+                
+                // Deduplicate by content and documentId
+                WITH docId, content, bestScore, bestPath
+                ORDER BY bestScore DESC
+                
+                // Collect unique results
+                WITH collect({
+                    content: content,
+                    documentId: docId,
+                    score: bestScore,
+                    entities: bestPath.entities,
+                    relationships: bestPath.relationships
+                }) as results
+                
+                // Return unique results
+                RETURN [r IN results WHERE r.content IS NOT NULL] as result
+                LIMIT 10`;
 
         const result = await this.runQuery(query, {
             documentIds,
             searchEntities
         });
 
-        const data = result.records.map(record => record.get('result'));
-        // console.log('Query results:', JSON.stringify(data, null, 2));
+        const data = result.records[0]?.get('result') || [];
+        console.log('Query results:', JSON.stringify(data, null, 2));
         return data;
     }
 

@@ -276,73 +276,60 @@ export class DocuGraphRAG {
             // Wait for all enabled searches to complete
             await Promise.all(searchPromises);
 
-            // Combine and deduplicate results with dynamic weights
+            // Combine and deduplicate results
             const allResults = new Map();
-            const activeSearchCount = [vectorSearch, textSearch, graphSearch].filter(Boolean).length;
-            const weightPerSearch = 1 / activeSearchCount;
 
-
-
-            // Add vector results
-            if (vectorSearch) {
-                vectorResults.forEach(result => {
-                    allResults.set(result.content, {
-                        content: result.content,
-                        score: result.score * weightPerSearch,
-                        documentId: result.documentId,
-                        entities: [],
-                        relationships: []
-                    });
-                });
-            }
-
-            // Add text results
-            if (textSearch) {
-                textResults.forEach(result => {
-                    if (allResults.has(result.content)) {
-                        const existing = allResults.get(result.content);
-                        existing.score += result.relevance * weightPerSearch;
-                    } else {
-                        allResults.set(result.content, {
+            // Helper function to add results to the map
+            const addResults = (results, source) => {
+                results.forEach(result => {
+                    const key = result.content;
+                    if (!allResults.has(key)) {
+                        allResults.set(key, {
                             content: result.content,
-                            score: result.relevance * weightPerSearch,
                             documentId: result.documentId,
-                            entities: [],
-                            relationships: []
-                        });
-                    }
-                });
-            }
-
-            // Add graph results
-            if (graphSearch) {
-                graphResults.forEach(result => {
-                    if (allResults.has(result.chunkContent)) {
-                        const existing = allResults.get(result.chunkContent);
-                        existing.score += result.graphScore * weightPerSearch;
-                        existing.entities = result.entities || [];
-                        existing.relationships = result.relationships || [];
-                    } else {
-                        allResults.set(result.chunkContent, {
-                            content: result.chunkContent,
-                            score: result.graphScore * weightPerSearch,
-                            documentId: result.documentId,
+                            score: result.score || result.relevance || 0,
+                            source: source,
                             entities: result.entities || [],
                             relationships: result.relationships || []
                         });
+                    } else {
+                        // Update score if new score is higher
+                        const existing = allResults.get(key);
+                        const newScore = result.score || result.relevance || 0;
+                        if (newScore > existing.score) {
+                            existing.score = newScore;
+                        }
                     }
                 });
-            }
+            };
 
-            // Convert to array and sort by combined score
+            // Add results from each search method
+            if (vectorSearch) addResults(vectorResults, 'vector');
+            if (graphSearch) addResults(graphResults, 'graph');
+            if (textSearch) addResults(textResults, 'text');
+
+
+            // Debug logging for allResults
+            console.log('\n=== All Results Map ===');
+            allResults.forEach((value, key) => {
+                console.log('============> Source:', value.source);
+                console.log('Content:', key);
+                console.log('Document ID:', value.documentId);
+                console.log('Score:', value.score);
+                console.log('Entities:', JSON.stringify(value.entities, null, 2));
+                console.log('Relationships:', JSON.stringify(value.relationships, null, 2));
+            });
+
+            // Convert map to array and sort by score
             const sortedResults = Array.from(allResults.values())
-                .sort((a, b) => b.score - a.score)
-                .slice(0, 5);  // Keep top 5 results
+                .sort((a, b) => b.score - a.score).slice(0, 5);
 
             if (sortedResults.length === 0) {
                 return "I couldn't find any relevant information in the selected documents to answer your question.";
             }
 
+
+            console.log('sortedResults:', JSON.stringify(sortedResults, null, 2));
             // Format context with search results
             const formattedContext = this.formatContextForLLM(sortedResults.map(result => ({
                 content: result.content,
@@ -351,6 +338,8 @@ export class DocuGraphRAG {
                 relationships: result.relationships || []
             })));
 
+
+            console.log('formattedContext:', formattedContext);
 
             // Generate the final answer
             return await this.llm.generateAnswer(question, formattedContext);
