@@ -52,7 +52,6 @@ docuGraphRAG.js is the successor of [docuRAG.js](https://github.com/msroot/docuR
 - Node.js 18+
 - Neo4j Database
 - OpenAI API Key
-- At least 8GB of free disk space
 
 ## 🚀 Quick Start
 
