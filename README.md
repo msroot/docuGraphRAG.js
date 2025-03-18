@@ -87,6 +87,8 @@ GRAPH_SEARCH_WEIGHT=0.3
 docker-compose up -d neo4j
 ```
 
+Access the Neo4j Browser at [http://localhost:7474/browser/](http://localhost:7474/browser/) to explore your graph database.
+
 5. Run the example app:
 ```bash
 cd app

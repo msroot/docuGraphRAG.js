@@ -61,7 +61,7 @@
                 <h3>Available Documents</h3>
                 <div id="documents" class="documents-container"></div>
                 <div class="neo4j-query">
-                    <h4>Neo4j Query</h4>
+                   <a href="http://localhost:7474/browser/" target="_blank"> <h4>Neo4j Query</h4></a>
                     <textarea id="neo4j-query" readonly>
 // Graph Visualization Query
 MATCH (d:Document)-[:HAS_CHUNK]->(c:DocumentChunk)-[:APPEARS_IN]->(e:Entity)
@@ -76,6 +76,8 @@ RETURN DISTINCT
     type(r) as relationshipType,
     e2 as targetEntity
                     </textarea>
+
+                    
                     <div class="neo4j-query-actions">
                         <button onclick="copyQuery(this)" class="tooltip" data-tooltip="Copy query to clipboard">
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -84,6 +86,8 @@ RETURN DISTINCT
                             </svg>
                             Copy Query
                         </button>
+                        
+                       
                     </div>
                 </div>
             </div>
