@@ -21,11 +21,14 @@ docuGraphRAG.js is the successor of [docuRAG.js](https://github.com/msroot/docuR
 - Generates vector embeddings for each chunk
 - Stores content in Neo4j for efficient retrieval
 
-### 2. Vector Search
-- Semantic understanding using embeddings
-- Find conceptually related content
-- Efficient embedding storage and retrieval
-- Configurable similarity thresholds
+### 2. Hybrid Search System
+- Multiple search strategies working together:
+  - Vector similarity search (40% weight)
+  - Full-text search (30% weight)
+  - Graph-based search (30% weight)
+- Intelligent result merging and ranking
+- Configurable search options
+- Efficient storage and retrieval
 
 ### 3. Basic Graph Storage
 - Stores documents as connected chunks
