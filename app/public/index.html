@@ -7,6 +7,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/styles.css">
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
 </head>
 <body>
     <header class="header">
@@ -60,6 +61,31 @@
             <div class="document-list" id="document-list">
                 <h3>Available Documents</h3>
                 <div id="documents" class="documents-container"></div>
+                
+                <div class="graph-container">
+                    <div class="graph-header">
+                        <h4>Knowledge Graph</h4>
+                        <button onclick="openGraphModal()" class="expand-graph-btn">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"></path>
+                            </svg>
+                            Expand
+                        </button>
+                    </div>
+                    <div id="graph-visualization" style="height: 400px; border: 1px solid #ddd; border-radius: 8px;"></div>
+                </div>
+
+                <!-- Graph Modal -->
+                <div id="graph-modal" class="modal">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h4>Knowledge Graph</h4>
+                            <button onclick="closeGraphModal()" class="close-modal">×</button>
+                        </div>
+                        <div id="graph-visualization-modal" style="height: 80vh;"></div>
+                    </div>
+                </div>
+
                 <div class="neo4j-query">
                    <a href="http://localhost:7474/browser/" target="_blank"> <h4>Neo4j Query</h4></a>
                     <textarea id="neo4j-query" readonly>
@@ -179,6 +205,9 @@ RETURN DISTINCT
                     localStorage.setItem('searchOptions', JSON.stringify(searchOptions));
                 });
             });
+
+            // Initialize graph when the page loads
+            initializeGraph();
         });
 
         function initializeDragAndDrop() {
@@ -279,7 +308,7 @@ RETURN DISTINCT
             docElement.innerHTML = `
                 <input type="checkbox" class="document-checkbox" value="${documentId}" ${doc.selected ? 'checked' : ''}>
                 <div class="document-info">
-                    <div class="document-name">${doc.name || doc.id}</div>
+                    <div class="document-name">${doc.name}</div>
                     <div class="document-date">${new Date(doc.uploadedAt).toLocaleDateString()}</div>
                     <div class="document-status">
                         ${doc.isProcessed ? '✓ Processed' : '⏳ Processing...'}
@@ -378,8 +407,9 @@ RETURN DISTINCT
                 userInput.placeholder = 'Ask a question about your selected documents...';
             }
 
-            // Update Neo4j query with selected document IDs
+            // Update Neo4j query and graph visualization
             updateNeo4jQuery();
+            updateGraph();
         }
 
         function updateNeo4jQuery() {
@@ -774,9 +804,177 @@ RETURN DISTINCT
             }
         }
 
-        // Add this CSS to style the messages
+        // Graph visualization code
+        let network = null;
+        let networkModal = null;
         
-        
+        function initializeGraph() {
+            const container = document.getElementById('graph-visualization');
+            const containerModal = document.getElementById('graph-visualization-modal');
+            const options = {
+                nodes: {
+                    shape: 'dot',
+                    size: 20,
+                    font: {
+                        size: 14,
+                        color: '#333'
+                    },
+                    borderWidth: 2,
+                    shadow: true
+                },
+                edges: {
+                    width: 2,
+                    color: { inherit: 'both' },
+                    smooth: {
+                        type: 'continuous'
+                    },
+                    arrows: {
+                        to: { enabled: true, scaleFactor: 0.5 }
+                    },
+                    font: {
+                        size: 12,
+                        align: 'middle'
+                    }
+                },
+                physics: {
+                    stabilization: false,
+                    barnesHut: {
+                        gravitationalConstant: -80000,
+                        springConstant: 0.001,
+                        springLength: 200
+                    }
+                },
+                interaction: {
+                    navigationButtons: true,
+                    keyboard: true,
+                    hover: true,
+                    tooltipDelay: 300
+                }
+            };
+
+            // Create network instances for both views
+            network = new vis.Network(container, { nodes: [], edges: [] }, options);
+            networkModal = new vis.Network(containerModal, { nodes: [], edges: [] }, options);
+        }
+
+        function openGraphModal() {
+            const modal = document.getElementById('graph-modal');
+            modal.style.display = 'block';
+            // Trigger reflow
+            modal.offsetHeight;
+            modal.classList.add('show');
+            if (networkModal) {
+                networkModal.fit();
+            }
+            // Prevent body scrolling
+            document.body.style.overflow = 'hidden';
+        }
+
+        function closeGraphModal() {
+            const modal = document.getElementById('graph-modal');
+            modal.classList.remove('show');
+            // Wait for animation to finish
+            setTimeout(() => {
+                modal.style.display = 'none';
+                // Restore body scrolling
+                document.body.style.overflow = '';
+            }, 300);
+        }
+
+        // Close modal when clicking outside
+        window.onclick = function(event) {
+            const modal = document.getElementById('graph-modal');
+            if (event.target === modal) {
+                closeGraphModal();
+            }
+        }
+
+        // Close modal with Escape key
+        window.addEventListener('keydown', function(event) {
+            if (event.key === 'Escape') {
+                closeGraphModal();
+            }
+        });
+
+        async function updateGraph() {
+            const selectedDocs = Array.from(documents.values())
+                .filter(doc => doc.selected)
+                .map(doc => doc.id);
+
+            if (selectedDocs.length === 0) {
+                if (network) {
+                    network.setData({ nodes: [], edges: [] });
+                }
+                if (networkModal) {
+                    networkModal.setData({ nodes: [], edges: [] });
+                }
+                return;
+            }
+
+            try {
+                const response = await fetch('/graph-data', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ documentIds: selectedDocs })
+                });
+
+                if (!response.ok) {
+                    throw new Error('Failed to fetch graph data');
+                }
+
+                const data = await response.json();
+                
+                // Transform data for vis.js
+                const nodes = new vis.DataSet();
+                const edges = new vis.DataSet();
+                
+                // Add Document nodes
+                data.nodes.forEach(node => {
+                    nodes.add({
+                        id: node.id,
+                        label: node.label,
+                        group: node.type,
+                        color: getNodeColor(node.type),
+                        title: `${node.type}: ${node.label}` // Add hover tooltip
+                    });
+                });
+
+                // Add relationships
+                data.edges.forEach(edge => {
+                    edges.add({
+                        from: edge.from,
+                        to: edge.to,
+                        label: edge.type,
+                        arrows: 'to',
+                        title: edge.type // Add hover tooltip
+                    });
+                });
+
+                // Update both networks
+                const graphData = { nodes, edges };
+                network.setData(graphData);
+                networkModal.setData(graphData);
+                
+                // Fit the view
+                network.fit();
+                networkModal.fit();
+
+            } catch (error) {
+                console.error('Error updating graph:', error);
+            }
+        }
+
+        function getNodeColor(type) {
+            const colors = {
+                Document: '#FFD700',
+                DocumentChunk: '#98FB98',
+                Entity: '#87CEEB',
+                default: '#FFA07A'
+            };
+            return colors[type] || colors.default;
+        }
     </script>
 </body>
 </html> 

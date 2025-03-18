@@ -247,6 +247,90 @@ app.delete('/documents/:documentId', async (req, res) => {
     }
 });
 
+app.post('/graph-data', async (req, res) => {
+    const { documentIds } = req.body;
+
+    if (!documentIds || !Array.isArray(documentIds) || documentIds.length === 0) {
+        return res.status(400).json({ error: 'Invalid document IDs' });
+    }
+
+    try {
+        const session = driver.session();
+        const query = `
+            MATCH (d:Document)-[:HAS_CHUNK]->(c:DocumentChunk)-[:APPEARS_IN]->(e:Entity)
+            WHERE d.documentId IN $documentIds
+            WITH d, c, e
+            MATCH (e)-[r]->(e2:Entity)
+            WHERE e.documentId = e2.documentId
+            RETURN DISTINCT 
+                d.documentId as docId,
+                d.name as docName,
+                c.index as chunkIndex,
+                e.text as sourceText,
+                e.type as sourceType,
+                type(r) as relationType,
+                e2.text as targetText,
+                e2.type as targetType
+        `;
+
+        const result = await session.run(query, { documentIds });
+
+        // Transform the results into a graph structure
+        const nodes = new Map();
+        const edges = new Set();
+
+        result.records.forEach(record => {
+            // Add document node
+            const docId = record.get('docId');
+            nodes.set(docId, {
+                id: docId,
+                label: record.get('docName') || docId,
+                type: 'Document'
+            });
+
+            // Add source entity node
+            const sourceId = `${docId}-${record.get('sourceText')}`;
+            nodes.set(sourceId, {
+                id: sourceId,
+                label: record.get('sourceText'),
+                type: record.get('sourceType')
+            });
+
+            // Add target entity node
+            const targetId = `${docId}-${record.get('targetText')}`;
+            nodes.set(targetId, {
+                id: targetId,
+                label: record.get('targetText'),
+                type: record.get('targetType')
+            });
+
+            // Add edges
+            edges.add({
+                from: docId,
+                to: sourceId,
+                type: 'HAS_ENTITY'
+            });
+
+            edges.add({
+                from: sourceId,
+                to: targetId,
+                type: record.get('relationType')
+            });
+        });
+
+        await session.close();
+
+        res.json({
+            nodes: Array.from(nodes.values()),
+            edges: Array.from(edges)
+        });
+
+    } catch (error) {
+        console.error('Error fetching graph data:', error);
+        res.status(500).json({ error: 'Failed to fetch graph data' });
+    }
+});
+
 // Start server with proper error handling
 const port = process.env.PORT || 3000;
 
