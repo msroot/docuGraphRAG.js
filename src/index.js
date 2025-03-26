@@ -56,10 +56,9 @@ export class DocuGraphRAG {
 
             // Initialize LLM service
             this.llm = new LLMService({
+                openaiApiKey: this.config.openaiApiKey,
                 driver: this.driver,
-                debug: this.debug,
-                apiKey: this.config.openaiApiKey,
-                model: this.config.openaiModel
+                debug: this.config.debug
             });
 
             // Create basic indexes

@@ -7,6 +7,8 @@ export class LLMService {
             ...config
         };
 
+        // Use the provided driver instance
+        this.driver = config.driver;
 
         this.openai = new OpenAI({
             apiKey: this.config.openaiApiKey,
@@ -185,7 +187,7 @@ IMPORTANT:
 
     async generateAnswer(question, context) {
         const response = await this.openai.chat.completions.create({
-            model: this.model,
+            model: "gpt-4",
             messages: [
                 {
                     role: "system",
