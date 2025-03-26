@@ -52,8 +52,8 @@ docuGraphRAG.js is the successor of [docuRAG.js](https://github.com/msroot/docuR
 ## 🛠️ Prerequisites
 
 - Node.js 18+
-- Neo4j Database
-- OpenAI API Key
+- Docker / Neo4j Database
+- OpenAI API Key (gpt-4)
 
 ## 🚀 Quick Start
 
@@ -68,8 +68,19 @@ cd docuGraphRAG.js
 npm install
 ```
 
+
+3. Start Neo4j (using Docker):
+```bash
+docker-compose up -d neo4j
+```
+
+Access the Neo4j Browser at [http://localhost:7474/browser/](http://localhost:7474/browser/) to explore your graph database.
+
+Run the example app 
+
 3. Create environment file:
 ```bash
+cd app/
 # Create a new .env file
 touch .env
 
@@ -80,21 +91,32 @@ NEO4J_PASSWORD=password
 OPENAI_API_KEY=your-openai-key
 ```
 
-4. Start Neo4j (using Docker):
-```bash
-docker-compose up -d neo4j
-```
-
-Access the Neo4j Browser at [http://localhost:7474/browser/](http://localhost:7474/browser/) to explore your graph database.
 
 5. Run the example app:
 ```bash
-cd app
 npm install
 npm start
 ```
 
-The app will be available at http://localhost:3000
+
+![docuGraphRAG.js](https://raw.githubusercontent.com/msroot/docuGraphRAG.js/main/docs/demo.png)
+
+The example app provides a complete web interface featuring:
+- Document upload and management
+- Interactive chat interface with streaming responses
+- Real-time Knowledge Graph visualization
+  - Visual representation of document relationships
+  - Entity connections and relationships
+  - Expandable full-screen view
+  - Interactive node exploration
+- Configurable search strategies:
+  - Vector similarity search
+  - Full-text search
+  - Graph-based search
+- Direct access to Neo4j Browser for advanced queries
+
+Visit http://localhost:3000 to explore the interface.
+
 
 ## ⚙️ Configuration
 
@@ -113,16 +135,6 @@ The app will be available at http://localhost:3000
 | `textSearchWeight` | number | 0.3 | Weight for full-text search (0-1) |
 | `graphSearchWeight` | number | 0.3 | Weight for graph-based search (0-1) |
 
-Example `.env` file:
-```bash
-NEO4J_URL=bolt://localhost:7687
-NEO4J_USER=neo4j
-NEO4J_PASSWORD=your-password
-OPENAI_API_KEY=your-openai-key
-VECTOR_SEARCH_WEIGHT=0.4
-TEXT_SEARCH_WEIGHT=0.3
-GRAPH_SEARCH_WEIGHT=0.3
-```
 
 Example configuration in code:
 ```javascript
@@ -266,36 +278,7 @@ When you ask a question:
 (DocumentChunk)-[:HAS_ENTITY]->(Entity)
 (Entity)-[:RELATES_TO]->(Entity)
 ```
-
-## 📚 Examples
-
-
-![docuGraphRAG.js](https://raw.githubusercontent.com/msroot/docuGraphRAG.js/main/docs/demo.png)
-
-
-The `examples/` directory contains ready-to-use implementations:
-
-### Express Server Example
-```bash
-cd examples/express
-npm install
-npm start
-```
-The example app provides a complete web interface featuring:
-- Document upload and management
-- Interactive chat interface with streaming responses
-- Real-time Knowledge Graph visualization
-  - Visual representation of document relationships
-  - Entity connections and relationships
-  - Expandable full-screen view
-  - Interactive node exploration
-- Configurable search strategies:
-  - Vector similarity search
-  - Full-text search
-  - Graph-based search
-- Direct access to Neo4j Browser for advanced queries
-
-Visit http://localhost:3000 to explore the interface.
+ 
 
 ## Contributing 🤝
 

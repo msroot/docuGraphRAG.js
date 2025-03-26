@@ -19,7 +19,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Load environment variables from the root directory
-dotenv.config({ path: path.resolve(__dirname, '../.env') });
+dotenv.config({ path: path.resolve(__dirname, './.env') });
 
 // Constants
 
@@ -37,7 +37,9 @@ const driver = neo4j.driver(
 );
 
 // Initialize DocuGraphRAG with environment variables
-const docurag = new DocuGraphRAG();
+const docurag = new DocuGraphRAG({
+    openaiApiKey: process.env.OPENAI_API_KEY,
+});
 
 // Configure multer for file uploads
 const upload = multer({

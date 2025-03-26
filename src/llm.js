@@ -3,17 +3,13 @@ import OpenAI from 'openai';
 export class LLMService {
     constructor(config = {}) {
         this.config = {
-            debug: true,
-            apiKey: process.env.OPENAI_API_KEY,
-            model: 'gpt-4',
             temperature: 0.1,
             ...config
         };
 
-        this.debug = this.config.debug;
-        this.driver = config.driver;
+
         this.openai = new OpenAI({
-            apiKey: this.config.apiKey,
+            apiKey: this.config.openaiApiKey,
             maxRetries: 3,
             dangerouslyAllowBrowser: true,
             debug: false

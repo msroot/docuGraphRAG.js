@@ -2,17 +2,7 @@ import neo4j from 'neo4j-driver';
 
 import { LLMService } from './llm.js';
 import { v4 as uuidv4 } from 'uuid';
-import dotenv from 'dotenv';
-import path from 'path';
-import { fileURLToPath } from 'url';
 import { RecursiveCharacterTextSplitter } from 'langchain/text_splitter';
-
-// Get the directory name of the current module
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// Load environment variables from the root directory
-dotenv.config({ path: path.resolve(__dirname, '../.env') });
 
 // Core relationship types
 const CORE_RELATIONSHIPS = {
@@ -32,8 +22,7 @@ export class DocuGraphRAG {
             neo4jUrl: 'bolt://localhost:7687',
             neo4jUser: 'neo4j',
             neo4jPassword: 'password',
-            openaiApiKey: process.env.OPENAI_API_KEY,
-            openaiModel: 'gpt-4',
+            openaiApiKey: '',
             chunkSize: 1000,
             chunkOverlap: 200,
             searchLimit: 3,
