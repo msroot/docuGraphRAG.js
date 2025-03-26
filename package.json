@@ -19,7 +19,6 @@
     "dev": "nodemon src/index.js"
   },
   "keywords": [
-    "pdf",
     "rag",
     "llm",
     "chat",
@@ -45,7 +44,6 @@
     "langchain": "^0.3.19",
     "neo4j-driver": "^5.28.1",
     "openai": "^4.28.0",
-    "pdfjs-dist": "^5.0.375",
     "uuid": "^9.0.1"
   },
   "devDependencies": {

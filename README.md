@@ -1,16 +1,13 @@
-# 🚀 docuGraphRAG.js 
+# 🚀 docuGraphRAG.js
 
-
-📝 A powerful document processing and RAG (Retrieval-Augmented Generation) library that transforms unstructured text from documents into rich knowledge graphs. By leveraging graph databases for enhanced context retrieval, it enables natural conversation with your documents through an intelligent chat interface.
-
-> **⚠️ RESEARCH PURPOSES ONLY**: This project is intended for research and educational purposes. It is not recommended for production use without proper evaluation and modifications.
+A document processing and **RAG (Retrieval-Augmented Generation)** library that transforms unstructured text from documents into rich knowledge graphs and performs entity and relation extraction based on the user's input analysis scope. By using a graph database for enhanced context retrieval, it enables natural conversation with your documents through a chat interface.
 
 ## 📖 Project Evolution
 
 docuGraphRAG.js is the successor of [docuRAG.js](https://github.com/msroot/docuRAG.js/), representing a significant architectural shift in how we handle document context and relationships:
 
 - Hybrid search combining vector, text, and graph-based approaches
-- Entity extraction and relationship modeling
+- Entity extraction and relationship modeling based on the user's scope.
 - Efficient storage and retrieval using Neo4j
 - Streaming responses for real-time chat interactions
 - Configurable search strategies and weights
@@ -75,11 +72,8 @@ touch .env
 # Add the following configuration to your .env file:
 NEO4J_URL=bolt://localhost:7687
 NEO4J_USER=neo4j
-NEO4J_PASSWORD=your-password
+NEO4J_PASSWORD=password
 OPENAI_API_KEY=your-openai-key
-VECTOR_SEARCH_WEIGHT=0.4
-TEXT_SEARCH_WEIGHT=0.3
-GRAPH_SEARCH_WEIGHT=0.3
 ```
 
 4. Start Neo4j (using Docker):
@@ -269,17 +263,6 @@ When you ask a question:
 (Entity)-[:RELATES_TO]->(Entity)
 ```
 
-## API Reference 📚
-
-### Core Methods
-- `processDocument(text, analysisDescription)`: Process and index a document
-- `chat(question, options)`: Ask questions about your documents
-  - Options:
-    - `documentIds`: Array of document IDs to search
-    - `vectorSearch`: Enable vector similarity search
-    - `textSearch`: Enable full-text search
-    - `graphSearch`: Enable graph-based search
-
 ## 📚 Examples
 
 The `examples/` directory contains ready-to-use implementations:
@@ -310,6 +293,10 @@ Visit http://localhost:3000 to explore the interface.
 
 We welcome contributions! Please check our contributing guidelines for more information.
 
+## Disclaimer ⚠️
+
+**RESEARCH PURPOSES ONLY.** This project, `docuGraphRAG.js`, is strictly intended for research and educational exploration. It has not been designed or tested for production environments and may contain limitations, errors, or security vulnerabilities.
+
 ## License 📄
 
 MIT License 
@@ -320,6 +307,7 @@ MIT License
 - Start a discussion for feature requests
 - Check our documentation for guides
 
+
 ---
 
-Built with ❤️ by [Yannis Kolovos](http://msroot.me/)
+Built with ❤️ by [Yannis Kolovos](https://msroot.me/)
