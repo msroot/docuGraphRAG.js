@@ -138,8 +138,6 @@ Visit http://localhost:3000 to explore the interface.
 
 Example configuration in code:
 ```javascript
-import { DocuGraphRAG } from 'docugraphrag';
-
 const config = {
     neo4jUrl: process.env.NEO4J_URL,
     neo4jUser: process.env.NEO4J_USER,
@@ -160,8 +158,6 @@ const rag = new DocuGraphRAG(config);
 ## 💻 Usage Example
 
 ```javascript
-import { DocuGraphRAG } from 'docugraphrag';
-
 // Initialize
 const rag = new DocuGraphRAG(config);
 await rag.initialize();
