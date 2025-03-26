@@ -2,6 +2,10 @@
 
 A document processing and **RAG (Retrieval-Augmented Generation)** library that transforms unstructured text from documents into rich knowledge graphs and performs entity and relation extraction based on the user's input analysis scope. By using a graph database for enhanced context retrieval, it enables natural conversation with your documents through a chat interface.
 
+
+
+![docuGraphRAG.js](https://raw.githubusercontent.com/msroot/docuGraphRAG.js/main/docs/graph.png)
+
 ## 📖 Project Evolution
 
 docuGraphRAG.js is the successor of [docuRAG.js](https://github.com/msroot/docuRAG.js/), representing a significant architectural shift in how we handle document context and relationships:
@@ -264,6 +268,10 @@ When you ask a question:
 ```
 
 ## 📚 Examples
+
+
+![docuGraphRAG.js](https://raw.githubusercontent.com/msroot/docuGraphRAG.js/main/docs/demo.png)
+
 
 The `examples/` directory contains ready-to-use implementations:
 
