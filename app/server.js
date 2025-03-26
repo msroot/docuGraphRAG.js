@@ -10,7 +10,7 @@ import * as pdfjsLib from 'pdfjs-dist';
 // Initialize PDF.js worker
 pdfjsLib.GlobalWorkerOptions.workerSrc = path.resolve(
     path.dirname(fileURLToPath(import.meta.url)),
-    '../node_modules/pdfjs-dist/build/pdf.worker.mjs'
+    'node_modules/pdfjs-dist/build/pdf.worker.mjs'
 );
 
 

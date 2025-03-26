@@ -1,7 +1,7 @@
 {
   "name": "docugraphrag",
-  "version": "1.1.0",
-  "description": "A graph-based RAG document question answering system using Neo4j and OpenAI",
+  "version": "1.0.2",
+  "description": "A graph-based RAG document question answering system",
   "type": "module",
   "main": "dist/index.js",
   "exports": {
@@ -25,11 +25,7 @@
     "ai",
     "documents",
     "vector-database",
-    "neo4j",
-    "graph-database",
-    "openai",
-    "embeddings",
-    "question-answering"
+    "neo4j"
   ],
   "author": "Yannis Kolovos",
   "license": "MIT",
@@ -41,13 +37,11 @@
     "url": "https://github.com/msroot/docuGraphRAG.js/issues"
   },
   "homepage": "https://github.com/msroot/docuGraphRAG.js#readme",
-  "engines": {
-    "node": ">=18.0.0"
-  },
   "dependencies": {
     "langchain": "^0.3.19",
     "neo4j-driver": "^5.28.1",
     "openai": "^4.28.0",
+    "pdfjs-dist": "^5.0.375",
     "uuid": "^9.0.1"
   },
   "devDependencies": {
