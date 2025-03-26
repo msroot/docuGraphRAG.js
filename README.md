@@ -53,7 +53,7 @@ docuGraphRAG.js is the successor of [docuRAG.js](https://github.com/msroot/docuR
 
 - Node.js 18+
 - Docker / Neo4j Database
-- OpenAI API Key (gpt-4)
+- OpenAI API Key (gpt-4 and text-embedding-3-small)
 
 ## 🚀 Quick Start
 
